@@ -16,6 +16,7 @@ import {
 	extractFunctionToolCalls,
 	getMarkdownFileToolDefinition,
 } from "./markdown-file-tool";
+import { createOpenAIFetchAdapter } from "./openai-fetch";
 import type { ChatMessage, ResolvedChatConfig } from "./types";
 
 export interface OpenAICompletion {
@@ -51,6 +52,7 @@ export class OpenAIClient {
 		this.client = new OpenAI({
 			apiKey: config.apiKey,
 			baseURL: config.baseUrl,
+			fetch: createOpenAIFetchAdapter(),
 			dangerouslyAllowBrowser: true,
 		});
 	}
