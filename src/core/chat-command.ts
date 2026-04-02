@@ -13,12 +13,14 @@ import {
 import { shouldShowTopOfAnswerLink } from "./response-length";
 import { parseSections } from "./message-parser";
 import { OpenAIClient, type OpenAICompletion } from "./openai-client";
+import type { RequestStatusManager } from "./request-status";
 import { buildAssistantPrefix, buildAssistantSuffix, getNextExchangeId } from "./response-anchors";
 import type { ChatMessage, PluginSettings, ResolvedChatConfig } from "./types";
 
 interface ChatCommandContext {
 	app: App;
 	editor: Editor;
+	requestStatus: RequestStatusManager;
 	view: MarkdownView;
 	settings: PluginSettings;
 }
@@ -29,7 +31,7 @@ interface OffsetRange {
 }
 
 export async function runChatCommand(context: ChatCommandContext): Promise<void> {
-	const { app, editor, settings, view } = context;
+	const { app, editor, requestStatus, settings, view } = context;
 	const file = view.file;
 
 	if (!file) {
@@ -94,11 +96,16 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	);
 
 	try {
+		requestStatus.notifyRequestStart(`Calling ${config.model}`);
+		requestStatus.setCalling(config.model);
+
 		if (shouldUseMarkdownFileTool) {
 			const completion = await runMarkdownFileToolConversation(
 				app,
 				client,
 				withMarkdownFileToolPolicy(messages, document.lastSavedMarkdownPath),
+				config.model,
+				requestStatus,
 			);
 			completionText = completion.text;
 			sourcesAppendix = completion.sourcesAppendix;
@@ -113,6 +120,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 				}
 			}
 		} else if (config.stream) {
+			let didSetStreamingStatus = false;
 			const completion = await client.stream(messages, {
 				onSearchStart: () => {
 					if (!noticeRange) {
@@ -121,12 +129,18 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 						noticeRange = { start: writeOffset, end: writeOffset + searchNotice.length };
 						writeOffset += searchNotice.length;
 					}
+					requestStatus.setWebSearch();
 				},
 				onText: (delta) => {
 					if (noticeRange) {
 						editor.replaceRange("", editor.offsetToPos(noticeRange.start), editor.offsetToPos(noticeRange.end));
 						writeOffset -= noticeRange.end - noticeRange.start;
 						noticeRange = null;
+					}
+
+					if (!didSetStreamingStatus) {
+						requestStatus.setStreaming(config.model);
+						didSetStreamingStatus = true;
 					}
 
 					editor.replaceRange(delta, editor.offsetToPos(writeOffset));
@@ -164,6 +178,8 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		editor.replaceRange(`\n\n_Error: ${message}_`, editor.offsetToPos(writeOffset));
 		writeOffset += `\n\n_Error: ${message}_`.length;
 		new Notice(`Convo GPT request failed: ${message}`);
+	} finally {
+		requestStatus.clear();
 	}
 
 	const assistantSuffix = buildAssistantSuffix(exchangeId, shouldShowTopOfAnswerLink(completionText));
@@ -260,6 +276,8 @@ async function runMarkdownFileToolConversation(
 	app: App,
 	client: OpenAIClient,
 	messages: ChatMessage[],
+	model: string,
+	requestStatus: RequestStatusManager,
 ): Promise<OpenAICompletion & { lastSavedMarkdownPath?: string }> {
 	let response = await client.createTurn({
 		messages,
@@ -288,13 +306,21 @@ async function runMarkdownFileToolConversation(
 				continue;
 			}
 
-			const result = await executeMarkdownWriteToolCall(app, toolCall.arguments);
+			const result = await executeMarkdownWriteToolCall(app, toolCall.arguments, undefined, {
+				onSaving: (path) => {
+					requestStatus.setSaving(path);
+				},
+				onWaitingForApproval: () => {
+					requestStatus.setWaitingForFileApproval();
+				},
+			});
 			if (result.status === "success" && result.path) {
 				lastSavedMarkdownPath = result.path;
 			}
 			toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
 		}
 
+		requestStatus.setCalling(model);
 		response = await client.createTurn({
 			includeMarkdownFileTool: true,
 			inputItems: toolOutputs,

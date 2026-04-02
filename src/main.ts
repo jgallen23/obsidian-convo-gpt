@@ -1,14 +1,24 @@
-import { MarkdownView, Notice, Plugin } from "obsidian";
+import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import { runChatCommand } from "./core/chat-command";
+import { PluginRequestStatusManager } from "./core/request-status";
 import { DEFAULT_SETTINGS, loadPluginSettings, savePluginSettings } from "./core/settings";
 import { ConvoGptSettingTab } from "./core/settings-tab";
 import type { PluginSettings } from "./core/types";
 
 export default class ConvoGptPlugin extends Plugin {
 	settings: PluginSettings = DEFAULT_SETTINGS;
+	private requestStatusManager!: PluginRequestStatusManager;
 
 	override async onload(): Promise<void> {
+		this.requestStatusManager = new PluginRequestStatusManager(
+			this.addStatusBarItem(),
+			Platform.isMobile,
+			(text) => {
+				new Notice(text);
+			},
+		);
 		this.settings = await loadPluginSettings(this);
+		this.requestStatusManager.clear();
 		this.addSettingTab(new ConvoGptSettingTab(this.app, this));
 
 		this.addCommand({
@@ -26,13 +36,14 @@ export default class ConvoGptPlugin extends Plugin {
 					editor,
 					view,
 					settings: this.settings,
+					requestStatus: this.requestStatusManager,
 				});
 			},
 		});
 	}
 
 	override onunload(): void {
-		// Registered resources are released by Obsidian.
+		this.requestStatusManager.clear();
 	}
 
 	async updateSettings(nextSettings: Partial<PluginSettings>): Promise<void> {

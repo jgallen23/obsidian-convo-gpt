@@ -18,10 +18,16 @@ export interface MarkdownWriteApprovalRequest {
 
 export type MarkdownWriteApprover = (request: MarkdownWriteApprovalRequest) => Promise<boolean>;
 
+export interface MarkdownWriteStatusCallbacks {
+	onSaving?: (path: string) => void;
+	onWaitingForApproval?: () => void;
+}
+
 export async function executeMarkdownWriteToolCall(
 	app: App,
 	argumentsJson: string,
 	approver: MarkdownWriteApprover = (request) => requestMarkdownWriteApproval(app, request),
+	statusCallbacks: MarkdownWriteStatusCallbacks = {},
 ): Promise<MarkdownWriteToolResult> {
 	const parsed = parseMarkdownWriteRequest(argumentsJson);
 	if (!parsed.success) {
@@ -31,13 +37,14 @@ export async function executeMarkdownWriteToolCall(
 		};
 	}
 
-	return executeMarkdownWriteRequest(app, parsed.data, approver);
+	return executeMarkdownWriteRequest(app, parsed.data, approver, statusCallbacks);
 }
 
 export async function executeMarkdownWriteRequest(
 	app: App,
 	request: MarkdownWriteRequest,
 	approver: MarkdownWriteApprover,
+	statusCallbacks: MarkdownWriteStatusCallbacks = {},
 ): Promise<MarkdownWriteToolResult> {
 	const resolved = resolveMarkdownVaultPath(request.path);
 	if (!resolved.success) {
@@ -78,6 +85,7 @@ export async function executeMarkdownWriteRequest(
 		};
 	}
 
+	statusCallbacks.onWaitingForApproval?.();
 	const approval = await approver({
 		path: resolved.path,
 		operation: request.operation,
@@ -97,6 +105,7 @@ export async function executeMarkdownWriteRequest(
 
 	switch (request.operation) {
 		case "create":
+			statusCallbacks.onSaving?.(resolved.path);
 			if (existing instanceof TFile) {
 				return {
 					status: "validation_error",
@@ -114,6 +123,7 @@ export async function executeMarkdownWriteRequest(
 				operation: request.operation,
 			};
 		case "replace":
+			statusCallbacks.onSaving?.(resolved.path);
 			if (!(existing instanceof TFile)) {
 				return {
 					status: "validation_error",
@@ -130,6 +140,7 @@ export async function executeMarkdownWriteRequest(
 				operation: request.operation,
 			};
 		case "append":
+			statusCallbacks.onSaving?.(resolved.path);
 			if (!(existing instanceof TFile)) {
 				return {
 					status: "validation_error",
