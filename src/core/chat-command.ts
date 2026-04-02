@@ -1,4 +1,4 @@
-import { Notice, type App, type Editor, type MarkdownView } from "obsidian";
+import { Notice, type App, type Editor, type EditorPosition, type MarkdownView } from "obsidian";
 import { resolveAgent } from "./agent-resolver";
 import { injectReferencedNoteContext } from "./context-resolver";
 import { parseNoteDocument, persistLastSavedMarkdownPath } from "./frontmatter";
@@ -15,6 +15,7 @@ import { parseSections } from "./message-parser";
 import { OpenAIClient, type OpenAICompletion } from "./openai-client";
 import type { RequestStatusManager } from "./request-status";
 import { buildAssistantPrefix, buildAssistantSuffix, getNextExchangeId } from "./response-anchors";
+import { StreamingWriter } from "./streaming-writer";
 import type { ChatMessage, PluginSettings, ResolvedChatConfig } from "./types";
 
 interface ChatCommandContext {
@@ -26,8 +27,8 @@ interface ChatCommandContext {
 }
 
 interface OffsetRange {
-	start: number;
-	end: number;
+	start: EditorPosition;
+	end: EditorPosition;
 }
 
 export async function runChatCommand(context: ChatCommandContext): Promise<void> {
@@ -89,6 +90,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let noticeRange: OffsetRange | null = null;
 	let completionText = "";
 	let sourcesAppendix = "";
+	let shouldPlaceFinalCursor = true;
 	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(
 		lastMessage.content,
 		config.enableMarkdownFileTool,
@@ -120,21 +122,30 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 				}
 			}
 		} else if (config.stream) {
+			const writer = new StreamingWriter(editor, editor.offsetToPos(writeOffset));
+			writer.start();
 			let didSetStreamingStatus = false;
 			const completion = await client.stream(messages, {
 				onSearchStart: () => {
+					writer.forceFlush();
 					if (!noticeRange) {
 						const searchNotice = "_[Using web search...]_\n\n";
-						editor.replaceRange(searchNotice, editor.offsetToPos(writeOffset));
-						noticeRange = { start: writeOffset, end: writeOffset + searchNotice.length };
-						writeOffset += searchNotice.length;
+						const start = writer.getCursor();
+						editor.replaceRange(searchNotice, start);
+						const end = editor.offsetToPos(editor.posToOffset(start) + searchNotice.length);
+						writer.setCursor(end);
+						noticeRange = {
+							start,
+							end,
+						};
 					}
 					requestStatus.setWebSearch();
 				},
 				onText: (delta) => {
 					if (noticeRange) {
-						editor.replaceRange("", editor.offsetToPos(noticeRange.start), editor.offsetToPos(noticeRange.end));
-						writeOffset -= noticeRange.end - noticeRange.start;
+						const pendingNoticeRange = noticeRange;
+						editor.replaceRange("", pendingNoticeRange.start, pendingNoticeRange.end);
+						writer.setCursor(pendingNoticeRange.start);
 						noticeRange = null;
 					}
 
@@ -143,11 +154,19 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 						didSetStreamingStatus = true;
 					}
 
-					editor.replaceRange(delta, editor.offsetToPos(writeOffset));
-					writeOffset += delta.length;
+					writer.append(delta);
 					completionText += delta;
 				},
 			});
+			writer.stop();
+			if (noticeRange) {
+				const pendingNoticeRange: OffsetRange = noticeRange;
+				editor.replaceRange("", pendingNoticeRange.start, pendingNoticeRange.end);
+				writer.setCursor(pendingNoticeRange.start);
+				noticeRange = null;
+			}
+			writeOffset = editor.posToOffset(writer.getCursor());
+			shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
 
 			sourcesAppendix = completion.sourcesAppendix;
 		} else {
@@ -160,7 +179,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 
 		const pendingNoticeRange = noticeRange;
 		if (pendingNoticeRange) {
-			writeOffset -= clearRange(editor, pendingNoticeRange);
+			clearRange(editor, pendingNoticeRange);
 			noticeRange = null;
 		}
 
@@ -171,7 +190,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	} catch (error) {
 		const pendingNoticeRange = noticeRange;
 		if (pendingNoticeRange) {
-			writeOffset -= clearRange(editor, pendingNoticeRange);
+			clearRange(editor, pendingNoticeRange);
 		}
 
 		const message = error instanceof Error ? error.message : String(error);
@@ -184,7 +203,9 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 
 	const assistantSuffix = buildAssistantSuffix(exchangeId, shouldShowTopOfAnswerLink(completionText));
 	editor.replaceRange(assistantSuffix, editor.offsetToPos(writeOffset));
-	editor.setCursor(editor.offsetToPos(writeOffset + assistantSuffix.length));
+	if (shouldPlaceFinalCursor) {
+		editor.setCursor(editor.offsetToPos(writeOffset + assistantSuffix.length));
+	}
 }
 
 async function buildMessages(
@@ -268,8 +289,9 @@ function resolveChatConfig(
 }
 
 function clearRange(editor: Editor, range: OffsetRange): number {
-	editor.replaceRange("", editor.offsetToPos(range.start), editor.offsetToPos(range.end));
-	return range.end - range.start;
+	const removedLength = editor.posToOffset(range.end) - editor.posToOffset(range.start);
+	editor.replaceRange("", range.start, range.end);
+	return removedLength;
 }
 
 async function runMarkdownFileToolConversation(
