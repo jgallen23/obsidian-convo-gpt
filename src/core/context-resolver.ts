@@ -9,6 +9,7 @@ export interface NoteReference {
 
 const WIKI_LINK_REGEX = /\[\[([^[\]]+)\]\]/g;
 const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
+const URI_SCHEME_REGEX = /^[a-z][a-z0-9+.-]*:/i;
 
 export function findNoteReferences(message: string): NoteReference[] {
 	const results: NoteReference[] = [];
@@ -98,5 +99,5 @@ export async function injectReferencedNoteContext(
 }
 
 function shouldIgnorePath(path: string): boolean {
-	return path.startsWith("http://") || path.startsWith("https://");
+	return path.includes("#") || URI_SCHEME_REGEX.test(path);
 }

@@ -15,6 +15,17 @@ describe("context resolver", () => {
 		expect(refs[0]?.path).toBe("Note");
 	});
 
+	it("ignores anchor links", () => {
+		const refs = findNoteReferences("[[Note#Heading]] and [Other](folder/file#section) and [Here](#local-anchor)");
+		expect(refs).toEqual([]);
+	});
+
+	it("ignores uri-scheme links like mailto and obsidian", () => {
+		const refs = findNoteReferences("[Email](mailto:test@example.com) [Open](obsidian://open?vault=JGA) [[Note]]");
+		expect(refs).toHaveLength(1);
+		expect(refs[0]?.path).toBe("Note");
+	});
+
 	it("injects referenced note context relative to the current file", async () => {
 		const agentFile = { path: "Agents/writer.md" };
 		const styleGuideFile = { path: "Agents/Style Guide.md" };

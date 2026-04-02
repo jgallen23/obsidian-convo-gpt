@@ -1,6 +1,8 @@
 import { Buffer } from "buffer";
 import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import { runChatCommand } from "./core/chat-command";
+import { runRetitleNoteCommand } from "./core/retitle-note-command";
+import { requestRetitleApproval } from "./core/retitle-note-approval";
 import { PluginRequestStatusManager } from "./core/request-status";
 import { DEFAULT_SETTINGS, loadPluginSettings, savePluginSettings } from "./core/settings";
 import { ConvoGptSettingTab } from "./core/settings-tab";
@@ -39,6 +41,30 @@ export default class ConvoGptPlugin extends Plugin {
 				void runChatCommand({
 					app: this.app,
 					editor,
+					view,
+					settings: this.settings,
+					requestStatus: this.requestStatusManager,
+				});
+			},
+		});
+
+		this.addCommand({
+			id: "summarize-and-retitle-note",
+			name: "Summarize And Retitle Note",
+			icon: "whole-word",
+			editorCallback: (editor, view) => {
+				if (!(view instanceof MarkdownView)) {
+					new Notice("Convo GPT can only run in markdown views.");
+					return;
+				}
+
+				void runRetitleNoteCommand({
+					app: this.app,
+					approver: (request) => requestRetitleApproval(this.app, request),
+					editor,
+					notify: (message) => {
+						new Notice(message);
+					},
 					view,
 					settings: this.settings,
 					requestStatus: this.requestStatusManager,
