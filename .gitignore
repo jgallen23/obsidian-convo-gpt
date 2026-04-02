@@ -1,0 +1,7 @@
+node_modules/
+coverage/
+dist/
+main.js
+main.js.map
+.DS_Store
+*.tsbuildinfo
