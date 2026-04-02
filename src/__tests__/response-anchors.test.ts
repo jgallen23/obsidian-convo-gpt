@@ -9,24 +9,24 @@ import {
 
 describe("response anchors", () => {
 	it("increments exchange ids based on assistant headings", () => {
-		expect(getNextExchangeId("# _AI 1_\n\nText\n<hr class=\"__convo_gpt__\">\n# _You 2_")).toBe("2");
+		expect(getNextExchangeId("# _AI (1)_\n\nText\n<hr class=\"__convo_gpt__\">\n# _You (2)_")).toBe("2");
 	});
 
 	it("builds AI and You headings with a heading link footer", () => {
-		expect(buildAssistantHeading("1")).toBe("# _AI 1_");
-		expect(buildUserHeading("2")).toBe("# _You 2_");
+		expect(buildAssistantHeading("1")).toBe("# _AI (1)_");
+		expect(buildUserHeading("2")).toBe("# _You (2)_");
 		expect(buildAssistantPrefix("openai@gpt-5.4", "1")).toContain(
-			"# _AI 1_",
+			"# _AI (1)_",
 		);
-		expect(buildAssistantSuffix("1", true)).toContain("[[#_AI 1_|Top of answer]]");
-		expect(buildAssistantSuffix("1", true)).toContain("# _You 2_");
-		expect(buildAssistantSuffix("1", true)).toContain("\n\n<hr class=\"__convo_gpt__\">\n# _You 2_");
+		expect(buildAssistantSuffix("1", true)).toContain("[[#_AI (1)_|Top of answer]]");
+		expect(buildAssistantSuffix("1", true)).toContain("# _You (2)_");
+		expect(buildAssistantSuffix("1", true)).toContain("\n\n<hr class=\"__convo_gpt__\">\n# _You (2)_");
 		expect(buildAssistantSuffix("1", true)).not.toContain("\n\n\n<hr class=\"__convo_gpt__\">");
 		expect(buildAssistantSuffix("1", true)).not.toContain("Jump to prompt");
 	});
 
 	it("omits the footer link while preserving spacing when disabled", () => {
 		expect(buildAssistantSuffix("1", false)).not.toContain("Top of answer");
-		expect(buildAssistantSuffix("1", false)).toContain("\n<hr class=\"__convo_gpt__\">\n# _You 2_");
+		expect(buildAssistantSuffix("1", false)).toContain("\n<hr class=\"__convo_gpt__\">\n# _You (2)_");
 	});
 });

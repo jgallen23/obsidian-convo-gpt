@@ -2,8 +2,8 @@ import { CHAT_SEPARATOR } from "./constants";
 import type { ChatRole, ParsedSection } from "./types";
 
 const ROLE_HEADING_REGEX = /^\s*(?:<a id="[^"]+"><\/a>\s*)*(#{1,6})\s+role::(assistant|system|user)\b[^\n]*\n?([\s\S]*)$/i;
-const MODERN_ROLE_HEADING_REGEX = /^\s*(#{1,6})\s+_?(AI|System|You)(?:\s+\d+)?_?\s*\n?([\s\S]*)$/i;
-const ASSISTANT_TOP_LINK_REGEX = /\n*\[\[#_?AI \d+_?\|Top of answer\]\]\s*$/;
+const MODERN_ROLE_HEADING_REGEX = /^\s*(#{1,6})\s+_?(AI|System|You)(?:\s+\d+|\s+\(\d+\))?_?\s*\n?([\s\S]*)$/i;
+const ASSISTANT_TOP_LINK_REGEX = /\n*\[\[#_?AI(?: \d+| \(\d+\))_?\|Top of answer\]\]\s*$/;
 
 export function parseSections(body: string): ParsedSection[] {
 	const sections: ParsedSection[] = [];
