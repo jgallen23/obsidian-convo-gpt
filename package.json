@@ -4,6 +4,14 @@
 	"description": "OpenAI-first markdown conversations inside Obsidian notes.",
 	"license": "MIT",
 	"private": true,
+	"homepage": "https://github.com/jgallen23/obsidian-convo-gpt",
+	"bugs": {
+		"url": "https://github.com/jgallen23/obsidian-convo-gpt/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/jgallen23/obsidian-convo-gpt.git"
+	},
 	"type": "module",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
