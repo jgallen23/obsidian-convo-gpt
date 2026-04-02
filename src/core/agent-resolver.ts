@@ -38,5 +38,6 @@ export async function resolveAgent(
 		frontmatter,
 		body,
 		path: agentFile.path,
+		file: agentFile,
 	};
 }

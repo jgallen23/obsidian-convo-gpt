@@ -52,6 +52,15 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		return;
 	}
 
+	let agentBody = agent?.body ?? "";
+	if (agent && agentBody.trim()) {
+		const enrichedAgent = await injectReferencedNoteContext(app, agent.file, agentBody);
+		if (enrichedAgent.missingReferences.length > 0) {
+			new Notice(`Convo GPT could not resolve agent references: ${enrichedAgent.missingReferences.join(", ")}`);
+		}
+		agentBody = enrichedAgent.content;
+	}
+
 	const messages = await buildMessages(
 		app,
 		file,
@@ -60,7 +69,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			content: section.content,
 		})),
 		config,
-		agent?.body ?? "",
+		agentBody,
 	);
 
 	const lastMessage = messages[messages.length - 1];

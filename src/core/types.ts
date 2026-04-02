@@ -1,3 +1,5 @@
+import type { TFile } from "obsidian";
+
 export type ChatRole = "assistant" | "system" | "user";
 
 export interface ChatMessage {
@@ -53,6 +55,7 @@ export interface AgentDefinition {
 	frontmatter: NoteOverrides;
 	body: string;
 	path: string;
+	file: TFile;
 }
 
 export interface ParsedNoteDocument {
