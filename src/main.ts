@@ -1,9 +1,14 @@
+import { Buffer } from "buffer";
 import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import { runChatCommand } from "./core/chat-command";
 import { PluginRequestStatusManager } from "./core/request-status";
 import { DEFAULT_SETTINGS, loadPluginSettings, savePluginSettings } from "./core/settings";
 import { ConvoGptSettingTab } from "./core/settings-tab";
 import type { PluginSettings } from "./core/types";
+
+if (typeof globalThis.Buffer === "undefined") {
+	globalThis.Buffer = Buffer;
+}
 
 export default class ConvoGptPlugin extends Plugin {
 	settings: PluginSettings = DEFAULT_SETTINGS;

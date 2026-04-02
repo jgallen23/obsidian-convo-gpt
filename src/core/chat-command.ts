@@ -40,40 +40,51 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		return;
 	}
 
-	const exchangeId = getNextExchangeId(editor.getValue());
-	const document = parseNoteDocument(editor.getValue());
-	const sections = parseSections(document.body);
-	if (sections.length === 0) {
-		new Notice("Convo GPT needs note content to send.");
-		return;
-	}
+	let exchangeId: string;
+	let document: ReturnType<typeof parseNoteDocument>;
+	let config: ResolvedChatConfig;
+	let messages: ChatMessage[];
 
-	const agent = await resolveAgent(app, settings, document.overrides.agent);
-	const config = resolveChatConfig(settings, agent?.frontmatter, document.overrides);
-	if (!config.apiKey) {
-		new Notice("Convo GPT is missing an OpenAI API key.");
-		return;
-	}
-
-	let agentBody = agent?.body ?? "";
-	if (agent && agentBody.trim()) {
-		const enrichedAgent = await injectReferencedNoteContext(app, agent.file, agentBody);
-		if (enrichedAgent.missingReferences.length > 0) {
-			new Notice(`Convo GPT could not resolve agent references: ${enrichedAgent.missingReferences.join(", ")}`);
+	try {
+		exchangeId = getNextExchangeId(editor.getValue());
+		document = parseNoteDocument(editor.getValue());
+		const sections = parseSections(document.body);
+		if (sections.length === 0) {
+			new Notice("Convo GPT needs note content to send.");
+			return;
 		}
-		agentBody = enrichedAgent.content;
-	}
 
-	const messages = await buildMessages(
-		app,
-		file,
-		sections.map((section) => ({
-			role: section.role,
-			content: section.content,
-		})),
-		config,
-		agentBody,
-	);
+		const agent = await resolveAgent(app, settings, document.overrides.agent);
+		config = resolveChatConfig(settings, agent?.frontmatter, document.overrides);
+		if (!config.apiKey) {
+			new Notice("Convo GPT is missing an OpenAI API key.");
+			return;
+		}
+
+		let agentBody = agent?.body ?? "";
+		if (agent && agentBody.trim()) {
+			const enrichedAgent = await injectReferencedNoteContext(app, agent.file, agentBody);
+			if (enrichedAgent.missingReferences.length > 0) {
+				new Notice(`Convo GPT could not resolve agent references: ${enrichedAgent.missingReferences.join(", ")}`);
+			}
+			agentBody = enrichedAgent.content;
+		}
+
+		messages = await buildMessages(
+			app,
+			file,
+			sections.map((section) => ({
+				role: section.role,
+				content: section.content,
+			})),
+			config,
+			agentBody,
+		);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		new Notice(`Convo GPT request failed: ${message}`);
+		return;
+	}
 
 	const lastMessage = messages[messages.length - 1];
 	if (!lastMessage || lastMessage.role !== "user" || !lastMessage.content.trim()) {
@@ -86,7 +97,6 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	editor.replaceRange(assistantPrefix, editor.offsetToPos(writeOffset));
 	writeOffset += assistantPrefix.length;
 
-	const client = new OpenAIClient(config);
 	let noticeRange: OffsetRange | null = null;
 	let completionText = "";
 	let sourcesAppendix = "";
@@ -98,6 +108,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	);
 
 	try {
+		const client = new OpenAIClient(config);
 		requestStatus.notifyRequestStart(`Calling ${config.model}`);
 		requestStatus.setCalling(config.model);
 
