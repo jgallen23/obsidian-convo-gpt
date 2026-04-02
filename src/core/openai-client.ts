@@ -1,8 +1,10 @@
 import OpenAI from "openai";
 import type { Responses } from "openai/resources/responses/responses";
 import type {
-	ResponseCreateParamsBase,
 	ResponseCreateParamsNonStreaming,
+	ResponseCreateParamsBase,
+	ResponseFunctionToolCall,
+	ResponseInputItem,
 	ResponseCreateParamsStreaming,
 } from "openai/resources/responses/responses";
 import {
@@ -10,11 +12,29 @@ import {
 	formatWebSearchSources,
 	supportsOpenAINativeWebSearch,
 } from "./openai-native-web-search";
+import {
+	extractFunctionToolCalls,
+	getMarkdownFileToolDefinition,
+} from "./markdown-file-tool";
 import type { ChatMessage, ResolvedChatConfig } from "./types";
 
 export interface OpenAICompletion {
 	text: string;
 	sourcesAppendix: string;
+}
+
+export interface OpenAITurn {
+	responseId: string;
+	text: string;
+	sourcesAppendix: string;
+	toolCalls: ResponseFunctionToolCall[];
+}
+
+export interface CreateTurnParams {
+	includeMarkdownFileTool?: boolean;
+	inputItems?: ResponseInputItem[];
+	messages?: ChatMessage[];
+	previousResponseId?: string;
 }
 
 export interface StreamCallbacks {
@@ -60,6 +80,16 @@ export class OpenAIClient {
 		return parsed;
 	}
 
+	async createTurn(params: CreateTurnParams): Promise<OpenAITurn> {
+		const response = await this.client.responses.create(this.buildTurnRequest(params));
+		return {
+			responseId: response.id,
+			text: extractText(response),
+			sourcesAppendix: formatWebSearchSources(extractResponseSources(response)),
+			toolCalls: extractFunctionToolCalls(response),
+		};
+	}
+
 	private buildBaseRequest(messages: ChatMessage[]): ResponseCreateParamsBase {
 		const normalizedModel = normalizeModelId(this.config.model);
 		const systemMessages = messages.filter((message) => message.role === "system");
@@ -88,6 +118,54 @@ export class OpenAIClient {
 		}
 
 		return request;
+	}
+
+	private buildTurnRequest(params: CreateTurnParams): ResponseCreateParamsNonStreaming {
+		const normalizedModel = normalizeModelId(this.config.model);
+		const tools: NonNullable<ResponseCreateParamsBase["tools"]> = [];
+
+		if (this.config.openai_native_web_search && supportsOpenAINativeWebSearch(normalizedModel)) {
+			tools.push({
+				type: "web_search_preview",
+				search_context_size: "medium",
+			});
+		}
+
+		if (params.includeMarkdownFileTool) {
+			tools.push(getMarkdownFileToolDefinition());
+		}
+
+		if (params.messages) {
+			const systemMessages = params.messages.filter((message) => message.role === "system");
+			const history: Responses.EasyInputMessage[] = params.messages
+				.filter((message) => message.role !== "system")
+				.map((message) => ({
+					role: message.role,
+					content: message.content,
+				}));
+
+			return {
+				model: normalizedModel,
+				input: history,
+				instructions: systemMessages.map((message) => message.content).join("\n\n") || undefined,
+				temperature: this.config.temperature,
+				max_output_tokens: this.config.max_tokens,
+				tools: tools.length > 0 ? tools : undefined,
+				parallel_tool_calls: false,
+				stream: false,
+			};
+		}
+
+		return {
+			model: normalizedModel,
+			input: params.inputItems ?? [],
+			previous_response_id: params.previousResponseId,
+			temperature: this.config.temperature,
+			max_output_tokens: this.config.max_tokens,
+			tools: tools.length > 0 ? tools : undefined,
+			parallel_tool_calls: false,
+			stream: false,
+		};
 	}
 
 	private buildStreamingRequest(messages: ChatMessage[]): ResponseCreateParamsStreaming {

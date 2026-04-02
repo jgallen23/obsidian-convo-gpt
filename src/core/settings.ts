@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	agentFolder: "",
 	defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
 	enableOpenAINativeWebSearch: true,
+	enableMarkdownFileTool: true,
 };
 
 export async function loadPluginSettings(plugin: Plugin): Promise<PluginSettings> {

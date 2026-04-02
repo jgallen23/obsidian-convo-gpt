@@ -115,5 +115,14 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 					await this.plugin.updateSettings({ enableOpenAINativeWebSearch: value });
 				}),
 			);
+
+		new Setting(containerEl)
+			.setName("Enable markdown file save tool")
+			.setDesc("Lets the model request approval to create or update other markdown files in the vault.")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableMarkdownFileTool).onChange(async (value) => {
+					await this.plugin.updateSettings({ enableMarkdownFileTool: value });
+				}),
+			);
 	}
 }

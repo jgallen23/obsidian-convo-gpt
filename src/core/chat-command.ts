@@ -1,10 +1,18 @@
 import { Notice, type App, type Editor, type MarkdownView } from "obsidian";
 import { resolveAgent } from "./agent-resolver";
 import { injectReferencedNoteContext } from "./context-resolver";
-import { parseNoteDocument } from "./frontmatter";
+import { parseNoteDocument, persistLastSavedMarkdownPath } from "./frontmatter";
+import { executeMarkdownWriteToolCall } from "./markdown-file-service";
+import {
+	buildMarkdownFileToolPolicy,
+	buildFunctionCallOutput,
+	MAX_MARKDOWN_TOOL_ROUNDS,
+	MARKDOWN_FILE_TOOL_NAME,
+	shouldOfferMarkdownFileTool,
+} from "./markdown-file-tool";
 import { shouldShowTopOfAnswerLink } from "./response-length";
 import { parseSections } from "./message-parser";
-import { OpenAIClient } from "./openai-client";
+import { OpenAIClient, type OpenAICompletion } from "./openai-client";
 import { buildAssistantPrefix, buildAssistantSuffix, getNextExchangeId } from "./response-anchors";
 import type { ChatMessage, PluginSettings, ResolvedChatConfig } from "./types";
 
@@ -70,9 +78,32 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let noticeRange: OffsetRange | null = null;
 	let completionText = "";
 	let sourcesAppendix = "";
+	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(
+		lastMessage.content,
+		config.enableMarkdownFileTool,
+		document.lastSavedMarkdownPath,
+	);
 
 	try {
-		if (config.stream) {
+		if (shouldUseMarkdownFileTool) {
+			const completion = await runMarkdownFileToolConversation(
+				app,
+				client,
+				withMarkdownFileToolPolicy(messages, document.lastSavedMarkdownPath),
+			);
+			completionText = completion.text;
+			sourcesAppendix = completion.sourcesAppendix;
+			editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
+			writeOffset += completionText.length;
+			if (completion.lastSavedMarkdownPath) {
+				const currentValue = editor.getValue();
+				const nextValue = persistLastSavedMarkdownPath(currentValue, completion.lastSavedMarkdownPath);
+				if (nextValue !== currentValue) {
+					editor.setValue(nextValue);
+					writeOffset += nextValue.length - currentValue.length;
+				}
+			}
+		} else if (config.stream) {
 			const completion = await client.stream(messages, {
 				onSearchStart: () => {
 					if (!noticeRange) {
@@ -207,10 +238,70 @@ function resolveChatConfig(
 			agentOverrides?.openai_native_web_search ??
 			settings.enableOpenAINativeWebSearch,
 		defaultSystemPrompt: settings.defaultSystemPrompt,
+		enableMarkdownFileTool: settings.enableMarkdownFileTool,
 	};
 }
 
 function clearRange(editor: Editor, range: OffsetRange): number {
 	editor.replaceRange("", editor.offsetToPos(range.start), editor.offsetToPos(range.end));
 	return range.end - range.start;
+}
+
+async function runMarkdownFileToolConversation(
+	app: App,
+	client: OpenAIClient,
+	messages: ChatMessage[],
+): Promise<OpenAICompletion & { lastSavedMarkdownPath?: string }> {
+	let response = await client.createTurn({
+		messages,
+		includeMarkdownFileTool: true,
+	});
+	let lastSavedMarkdownPath: string | undefined;
+
+	for (let round = 0; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
+		if (response.toolCalls.length === 0) {
+			return {
+				text: response.text,
+				sourcesAppendix: response.sourcesAppendix,
+				lastSavedMarkdownPath,
+			};
+		}
+
+		const toolOutputs = [];
+		for (const toolCall of response.toolCalls) {
+			if (toolCall.name !== MARKDOWN_FILE_TOOL_NAME) {
+				toolOutputs.push(
+					buildFunctionCallOutput(toolCall.call_id, {
+						status: "validation_error",
+						message: `Unsupported tool call: ${toolCall.name}`,
+					}),
+				);
+				continue;
+			}
+
+			const result = await executeMarkdownWriteToolCall(app, toolCall.arguments);
+			if (result.status === "success" && result.path) {
+				lastSavedMarkdownPath = result.path;
+			}
+			toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
+		}
+
+		response = await client.createTurn({
+			includeMarkdownFileTool: true,
+			inputItems: toolOutputs,
+			previousResponseId: response.responseId,
+		});
+	}
+
+	throw new Error("Convo GPT exceeded the markdown file tool round limit.");
+}
+
+function withMarkdownFileToolPolicy(messages: ChatMessage[], rememberedPath?: string): ChatMessage[] {
+	return [
+		...messages,
+		{
+			role: "system",
+			content: buildMarkdownFileToolPolicy(rememberedPath),
+		},
+	];
 }

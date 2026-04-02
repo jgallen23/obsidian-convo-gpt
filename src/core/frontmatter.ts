@@ -1,6 +1,6 @@
 import matter from "gray-matter";
 import { z } from "zod";
-import { DEFAULT_SYSTEM_PROMPT } from "./constants";
+import { DEFAULT_SYSTEM_PROMPT, LAST_SAVED_MARKDOWN_PATH_KEY } from "./constants";
 import type { NoteOverrides, ParsedNoteDocument, PluginSettings } from "./types";
 
 const booleanSchema = z.preprocess((value) => {
@@ -46,6 +46,7 @@ const settingsSchema = z.object({
 	agentFolder: z.string().default(""),
 	defaultSystemPrompt: z.string().default(DEFAULT_SYSTEM_PROMPT),
 	enableOpenAINativeWebSearch: z.boolean().default(true),
+	enableMarkdownFileTool: z.boolean().default(true),
 });
 
 const FRONTMATTER_BLOCK_REGEX = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -54,11 +55,13 @@ export function parseNoteDocument(text: string): ParsedNoteDocument {
 	const parsed = matter(text);
 	const match = text.match(FRONTMATTER_BLOCK_REGEX);
 	const bodyStartOffset = match ? match[0].length : 0;
+	const lastSavedMarkdownPath = getPersistedLastSavedMarkdownPath(text);
 
 	return {
 		body: parsed.content,
 		bodyStartOffset,
 		overrides: parseNoteOverrides(parsed.data),
+		lastSavedMarkdownPath,
 	};
 }
 
@@ -84,4 +87,22 @@ export function sanitizeSettings(data: unknown): PluginSettings {
 		...parsed,
 		defaultSystemPrompt: parsed.defaultSystemPrompt || DEFAULT_SYSTEM_PROMPT,
 	};
+}
+
+export function getPersistedLastSavedMarkdownPath(text: string): string | undefined {
+	const parsed = matter(text);
+	const value = parsed.data?.[LAST_SAVED_MARKDOWN_PATH_KEY];
+	if (typeof value !== "string") {
+		return undefined;
+	}
+
+	const normalized = value.trim();
+	return normalized.length > 0 ? normalized : undefined;
+}
+
+export function persistLastSavedMarkdownPath(text: string, path: string): string {
+	const parsed = matter(text);
+	const data = typeof parsed.data === "object" && parsed.data !== null ? { ...parsed.data } : {};
+	data[LAST_SAVED_MARKDOWN_PATH_KEY] = path;
+	return matter.stringify(parsed.content, data);
 }

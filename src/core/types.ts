@@ -32,6 +32,7 @@ export interface PluginSettings {
 	agentFolder: string;
 	defaultSystemPrompt: string;
 	enableOpenAINativeWebSearch: boolean;
+	enableMarkdownFileTool: boolean;
 }
 
 export interface ResolvedChatConfig {
@@ -45,6 +46,7 @@ export interface ResolvedChatConfig {
 	system_commands: string[];
 	openai_native_web_search: boolean;
 	defaultSystemPrompt: string;
+	enableMarkdownFileTool: boolean;
 }
 
 export interface AgentDefinition {
@@ -57,4 +59,5 @@ export interface ParsedNoteDocument {
 	body: string;
 	bodyStartOffset: number;
 	overrides: NoteOverrides;
+	lastSavedMarkdownPath?: string;
 }

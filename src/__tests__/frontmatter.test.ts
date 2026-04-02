@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseNoteDocument, parseNoteOverrides, sanitizeSettings, stripFrontmatter } from "../core/frontmatter";
+import {
+	parseNoteDocument,
+	parseNoteOverrides,
+	persistLastSavedMarkdownPath,
+	sanitizeSettings,
+	stripFrontmatter,
+} from "../core/frontmatter";
 import { DEFAULT_SYSTEM_PROMPT } from "../core/constants";
 
 describe("frontmatter helpers", () => {
@@ -30,6 +36,7 @@ Hello`;
 		const settings = sanitizeSettings({});
 		expect(settings.defaultModel).toBe("openai@gpt-5.4");
 		expect(settings.enableOpenAINativeWebSearch).toBe(true);
+		expect(settings.enableMarkdownFileTool).toBe(true);
 		expect(settings.agentFolder).toBe("");
 		expect(settings.defaultSystemPrompt).toBe(DEFAULT_SYSTEM_PROMPT);
 	});
@@ -41,5 +48,12 @@ Hello`;
 	it("preserves an explicitly blank agent folder", () => {
 		const settings = sanitizeSettings({ agentFolder: "" });
 		expect(settings.agentFolder).toBe("");
+	});
+
+	it("persists and parses the last saved markdown path", () => {
+		const updated = persistLastSavedMarkdownPath("# _You 1_\n\nHello", "Stories/story.md");
+		const parsed = parseNoteDocument(updated);
+		expect(parsed.lastSavedMarkdownPath).toBe("Stories/story.md");
+		expect(parsed.body).toContain("# _You 1_");
 	});
 });
