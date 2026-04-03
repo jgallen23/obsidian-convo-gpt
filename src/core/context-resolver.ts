@@ -7,6 +7,11 @@ export interface NoteReference {
 	path: string;
 }
 
+export interface ResolvedNoteReference {
+	file: TFile;
+	reference: NoteReference;
+}
+
 const WIKI_LINK_REGEX = /\[\[([^[\]]+)\]\]/g;
 const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
 const URI_SCHEME_REGEX = /^[a-z][a-z0-9+.-]*:/i;
@@ -51,26 +56,15 @@ export async function injectReferencedNoteContext(
 	currentFile: TFile | null,
 	message: string,
 ): Promise<{ content: string; missingReferences: string[] }> {
-	const references = findNoteReferences(message);
+	const { missingReferences, references } = resolveNoteReferences(app, currentFile, message);
 	if (references.length === 0) {
 		return { content: message, missingReferences: [] };
 	}
 
 	const blocks: string[] = [];
-	const missingReferences: string[] = [];
 	const seenPaths = new Set<string>();
 
-	for (const reference of references) {
-		const file = app.metadataCache.getFirstLinkpathDest(reference.path, currentFile?.path ?? "");
-		if (!file) {
-			missingReferences.push(reference.path);
-			continue;
-		}
-
-		if (currentFile && file.path === currentFile.path) {
-			continue;
-		}
-
+	for (const { file, reference } of references) {
 		if (seenPaths.has(file.path)) {
 			continue;
 		}
@@ -94,6 +88,52 @@ export async function injectReferencedNoteContext(
 
 	return {
 		content: [message.trim(), "", "---", "Referenced note context", "", blocks.join("\n\n---\n\n")].join("\n"),
+		missingReferences,
+	};
+}
+
+export function resolveNoteReferences(
+	app: App,
+	currentFile: TFile | null,
+	message: string,
+): { references: ResolvedNoteReference[]; missingReferences: string[] } {
+	const references = findNoteReferences(message);
+	if (references.length === 0) {
+		return {
+			references: [],
+			missingReferences: [],
+		};
+	}
+
+	const resolved: ResolvedNoteReference[] = [];
+	const missingReferences: string[] = [];
+	const seen = new Set<string>();
+
+	for (const reference of references) {
+		const file = app.metadataCache.getFirstLinkpathDest(reference.path, currentFile?.path ?? "");
+		if (!file) {
+			missingReferences.push(reference.path);
+			continue;
+		}
+
+		if (currentFile && file.path === currentFile.path) {
+			continue;
+		}
+
+		const key = `${reference.path}::${file.path}`;
+		if (seen.has(key)) {
+			continue;
+		}
+
+		seen.add(key);
+		resolved.push({
+			file,
+			reference,
+		});
+	}
+
+	return {
+		references: resolved,
 		missingReferences,
 	};
 }

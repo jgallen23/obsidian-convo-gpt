@@ -175,6 +175,8 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		defaultSystemPrompt: "Be concise.",
 		enableOpenAINativeWebSearch: true,
 		enableMarkdownFileTool: true,
+		enableReferencedFileReadTool: true,
+		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],
 		...overrides,
 	};
 }

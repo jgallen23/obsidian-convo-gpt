@@ -2,6 +2,7 @@ import { Buffer } from "buffer";
 import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import { runChatCommand } from "./core/chat-command";
 import { runRetitleNoteCommand } from "./core/retitle-note-command";
+import { sanitizeSettings } from "./core/frontmatter";
 import { requestRetitleApproval } from "./core/retitle-note-approval";
 import { PluginRequestStatusManager } from "./core/request-status";
 import { DEFAULT_SETTINGS, loadPluginSettings, savePluginSettings } from "./core/settings";
@@ -78,10 +79,10 @@ export default class ConvoGptPlugin extends Plugin {
 	}
 
 	async updateSettings(nextSettings: Partial<PluginSettings>): Promise<void> {
-		this.settings = {
+		this.settings = sanitizeSettings({
 			...this.settings,
 			...nextSettings,
-		};
+		});
 		await savePluginSettings(this, this.settings);
 	}
 }

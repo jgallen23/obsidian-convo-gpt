@@ -25,5 +25,7 @@ export function resolveChatConfig(
 			settings.enableOpenAINativeWebSearch,
 		defaultSystemPrompt: settings.defaultSystemPrompt,
 		enableMarkdownFileTool: settings.enableMarkdownFileTool,
+		enableReferencedFileReadTool: settings.enableReferencedFileReadTool,
+		referencedFileExtensions: settings.referencedFileExtensions,
 	};
 }

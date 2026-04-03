@@ -124,5 +124,31 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 					await this.plugin.updateSettings({ enableMarkdownFileTool: value });
 				}),
 			);
+
+		new Setting(containerEl)
+			.setName("Enable referenced file read tool")
+			.setDesc("Lets the model read linked supported files on demand instead of preloading them into the prompt.")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableReferencedFileReadTool).onChange(async (value) => {
+					await this.plugin.updateSettings({ enableReferencedFileReadTool: value });
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Referenced file extensions")
+			.setDesc("Comma-separated list of file extensions the read tool may open, for example md, txt, csv, json, yaml.")
+			.addText((text) =>
+				text
+					.setPlaceholder("md, txt, csv, json, yaml")
+					.setValue(this.plugin.settings.referencedFileExtensions.join(", "))
+					.onChange(async (value) => {
+						await this.plugin.updateSettings({
+							referencedFileExtensions: value
+								.split(",")
+								.map((extension) => extension.trim())
+								.filter((extension) => extension.length > 0),
+						});
+					}),
+			);
 	}
 }

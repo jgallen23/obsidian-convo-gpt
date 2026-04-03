@@ -1,7 +1,5 @@
 import type {
 	FunctionTool,
-	ResponseFunctionToolCall,
-	ResponseInputItem,
 } from "openai/resources/responses/responses";
 import { z } from "zod";
 
@@ -195,43 +193,6 @@ export function resolveMarkdownVaultPath(rawPath: string): { path: string; succe
 	return { success: true, path };
 }
 
-export function extractFunctionToolCalls(response: unknown): ResponseFunctionToolCall[] {
-	const record = toRecord(response);
-	const output = Array.isArray(record.output) ? record.output : [];
-	const calls: ResponseFunctionToolCall[] = [];
-
-	for (const item of output) {
-		const itemRecord = toRecord(item);
-		if (
-			itemRecord.type === "function_call" &&
-			typeof itemRecord.call_id === "string" &&
-			typeof itemRecord.name === "string" &&
-			typeof itemRecord.arguments === "string"
-		) {
-			calls.push({
-				type: "function_call",
-				call_id: itemRecord.call_id,
-				name: itemRecord.name,
-				arguments: itemRecord.arguments,
-				id: typeof itemRecord.id === "string" ? itemRecord.id : undefined,
-				status: itemRecord.status === "completed" || itemRecord.status === "in_progress" || itemRecord.status === "incomplete"
-					? itemRecord.status
-					: undefined,
-			});
-		}
-	}
-
-	return calls;
-}
-
-export function buildFunctionCallOutput(callId: string, result: MarkdownWriteToolResult): ResponseInputItem {
-	return {
-		type: "function_call_output",
-		call_id: callId,
-		output: JSON.stringify(result),
-	};
-}
-
 export function buildMarkdownWritePreview(content: string | undefined, maxChars = 800): string {
 	const trimmed = (content ?? "").trim();
 	if (!trimmed) {
@@ -239,8 +200,4 @@ export function buildMarkdownWritePreview(content: string | undefined, maxChars 
 	}
 
 	return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}\n…` : trimmed;
-}
-
-function toRecord(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }

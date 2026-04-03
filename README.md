@@ -7,7 +7,7 @@ OpenAI-first markdown-native conversations inside Obsidian notes.
 - Section-based chat format inside a markdown note
 - OpenAI-only requests with per-note frontmatter overrides
 - Agent prompts loaded from a configurable agent folder
-- One-level note reference expansion for `[[Wiki Links]]` and markdown note links
+- On-demand linked file reads for chat notes and agent prompts, with configurable supported extensions
 - OpenAI native `web_search`
 - Jump links at the end of every assistant response
 

@@ -35,6 +35,8 @@ export interface PluginSettings {
 	defaultSystemPrompt: string;
 	enableOpenAINativeWebSearch: boolean;
 	enableMarkdownFileTool: boolean;
+	enableReferencedFileReadTool: boolean;
+	referencedFileExtensions: string[];
 }
 
 export interface ResolvedChatConfig {
@@ -49,6 +51,8 @@ export interface ResolvedChatConfig {
 	openai_native_web_search: boolean;
 	defaultSystemPrompt: string;
 	enableMarkdownFileTool: boolean;
+	enableReferencedFileReadTool: boolean;
+	referencedFileExtensions: string[];
 }
 
 export interface AgentDefinition {

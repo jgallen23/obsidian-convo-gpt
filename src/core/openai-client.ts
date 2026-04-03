@@ -13,9 +13,12 @@ import {
 	supportsOpenAINativeWebSearch,
 } from "./openai-native-web-search";
 import {
-	extractFunctionToolCalls,
 	getMarkdownFileToolDefinition,
 } from "./markdown-file-tool";
+import {
+	extractFunctionToolCalls,
+	getReferencedFileToolDefinition,
+} from "./referenced-file-tool";
 import { createOpenAIFetchAdapter } from "./openai-fetch";
 import type { ChatMessage, ResolvedChatConfig } from "./types";
 
@@ -33,6 +36,7 @@ export interface OpenAITurn {
 
 export interface CreateTurnParams {
 	includeMarkdownFileTool?: boolean;
+	includeReferencedFileTool?: boolean;
 	inputItems?: ResponseInputItem[];
 	messages?: ChatMessage[];
 	previousResponseId?: string;
@@ -135,6 +139,10 @@ export class OpenAIClient {
 
 		if (params.includeMarkdownFileTool) {
 			tools.push(getMarkdownFileToolDefinition());
+		}
+
+		if (params.includeReferencedFileTool) {
+			tools.push(getReferencedFileToolDefinition());
 		}
 
 		if (params.messages) {

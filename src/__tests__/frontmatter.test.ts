@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	normalizeReferencedFileExtensions,
 	parseNoteDocument,
 	parseNoteOverrides,
 	persistLastSavedMarkdownPath,
@@ -37,6 +38,8 @@ Hello`;
 		expect(settings.defaultModel).toBe("openai@gpt-5.4");
 		expect(settings.enableOpenAINativeWebSearch).toBe(true);
 		expect(settings.enableMarkdownFileTool).toBe(true);
+		expect(settings.enableReferencedFileReadTool).toBe(true);
+		expect(settings.referencedFileExtensions).toEqual(["md", "txt", "csv", "json", "yaml"]);
 		expect(settings.agentFolder).toBe("");
 		expect(settings.defaultSystemPrompt).toBe(DEFAULT_SYSTEM_PROMPT);
 	});
@@ -55,5 +58,9 @@ Hello`;
 		const parsed = parseNoteDocument(updated);
 		expect(parsed.lastSavedMarkdownPath).toBe("Stories/story.md");
 		expect(parsed.body).toContain("# _You 1_");
+	});
+
+	it("normalizes referenced file extensions", () => {
+		expect(normalizeReferencedFileExtensions([".MD", " txt ", "", "json", "md"])).toEqual(["md", "txt", "json"]);
 	});
 });

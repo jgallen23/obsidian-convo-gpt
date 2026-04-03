@@ -1,16 +1,29 @@
-import { Notice, type App, type Editor, type EditorPosition, type MarkdownView } from "obsidian";
+import { Notice, TFile, type App, type Editor, type EditorPosition, type MarkdownView } from "obsidian";
 import { resolveAgent } from "./agent-resolver";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
 import { parseNoteDocument, persistLastSavedMarkdownPath } from "./frontmatter";
 import { executeMarkdownWriteToolCall } from "./markdown-file-service";
 import {
+	addReferencedFileReadSeeds,
+	createReferencedFileReadState,
+	executeReferencedFileReadToolCall,
+	type ReferencedFileReadState,
+} from "./referenced-file-service";
+import {
 	buildMarkdownFileToolPolicy,
-	buildFunctionCallOutput,
 	MAX_MARKDOWN_TOOL_ROUNDS,
 	MARKDOWN_FILE_TOOL_NAME,
 	shouldOfferMarkdownFileTool,
 } from "./markdown-file-tool";
+import {
+	buildFunctionCallOutput,
+	formatReferencedFileAppendix,
+	buildReferencedFileToolPolicy,
+	REFERENCED_FILE_TOOL_NAME,
+	type ReferencedFileSummary,
+	type ReferencedFileReadToolResult,
+} from "./referenced-file-tool";
 import { shouldShowTopOfAnswerLink } from "./response-length";
 import { parseSections } from "./message-parser";
 import { OpenAIClient, type OpenAICompletion } from "./openai-client";
@@ -45,6 +58,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let document: ReturnType<typeof parseNoteDocument>;
 	let config: ResolvedChatConfig;
 	let messages: ChatMessage[];
+	let referencedFileReadState: ReferencedFileReadState | undefined;
 
 	try {
 		exchangeId = getNextExchangeId(editor.getValue());
@@ -63,7 +77,31 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		}
 
 		let agentBody = agent?.body ?? "";
-		if (agent && agentBody.trim()) {
+		if (config.enableReferencedFileReadTool) {
+			referencedFileReadState = createReferencedFileReadState(config.referencedFileExtensions);
+
+			if (agent && agentBody.trim()) {
+				const missingReferences = addReferencedFileReadSeeds(app, referencedFileReadState, [
+					{
+						currentFile: agent.file,
+						content: agentBody,
+					},
+				]);
+				if (missingReferences.length > 0) {
+					new Notice(`Convo GPT could not resolve agent references: ${missingReferences.join(", ")}`);
+				}
+			}
+
+			const missingReferences = addReferencedFileReadSeeds(app, referencedFileReadState, [
+				{
+					currentFile: file,
+					content: document.body,
+				},
+			]);
+			if (missingReferences.length > 0) {
+				new Notice(`Convo GPT could not resolve: ${missingReferences.join(", ")}`);
+			}
+		} else if (agent && agentBody.trim()) {
 			const enrichedAgent = await injectReferencedNoteContext(app, agent.file, agentBody);
 			if (enrichedAgent.missingReferences.length > 0) {
 				new Notice(`Convo GPT could not resolve agent references: ${enrichedAgent.missingReferences.join(", ")}`);
@@ -107,19 +145,31 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		config.enableMarkdownFileTool,
 		document.lastSavedMarkdownPath,
 	);
+	const shouldUseReferencedFileTool = Boolean(
+		config.enableReferencedFileReadTool && referencedFileReadState && referencedFileReadState.allowedPaths.size > 0,
+	);
 
 	try {
 		const client = new OpenAIClient(config);
 		requestStatus.notifyRequestStart(`Calling ${config.model}`);
 		requestStatus.setCalling(config.model);
 
-		if (shouldUseMarkdownFileTool) {
-			const completion = await runMarkdownFileToolConversation(
+		if (shouldUseMarkdownFileTool || shouldUseReferencedFileTool) {
+			const completion = await runToolConversation(
 				app,
 				client,
-				withMarkdownFileToolPolicy(messages, document.lastSavedMarkdownPath),
+				withToolPolicies(messages, {
+					includeMarkdownFileTool: shouldUseMarkdownFileTool,
+					includeReferencedFileTool: shouldUseReferencedFileTool,
+					rememberedPath: document.lastSavedMarkdownPath,
+				}),
 				config.model,
 				requestStatus,
+				{
+					includeMarkdownFileTool: shouldUseMarkdownFileTool,
+					includeReferencedFileTool: shouldUseReferencedFileTool,
+					referencedFileReadState,
+				},
 			);
 			completionText = completion.text;
 			sourcesAppendix = completion.sourcesAppendix;
@@ -258,6 +308,11 @@ async function buildMessages(
 			continue;
 		}
 
+		if (config.enableReferencedFileReadTool) {
+			messages.push(message);
+			continue;
+		}
+
 		const enriched = await injectReferencedNoteContext(app, file ?? null, message.content);
 		if (enriched.missingReferences.length > 0) {
 			new Notice(`Convo GPT could not resolve: ${enriched.missingReferences.join(", ")}`);
@@ -278,57 +333,80 @@ function clearRange(editor: Editor, range: OffsetRange): number {
 	return removedLength;
 }
 
-async function runMarkdownFileToolConversation(
+interface ToolConversationOptions {
+	includeMarkdownFileTool: boolean;
+	includeReferencedFileTool: boolean;
+	referencedFileReadState?: ReferencedFileReadState;
+}
+
+async function runToolConversation(
 	app: App,
 	client: OpenAIClient,
 	messages: ChatMessage[],
 	model: string,
 	requestStatus: RequestStatusManager,
+	options: ToolConversationOptions,
 ): Promise<OpenAICompletion & { lastSavedMarkdownPath?: string }> {
 	let response = await client.createTurn({
 		messages,
-		includeMarkdownFileTool: true,
+		includeMarkdownFileTool: options.includeMarkdownFileTool,
+		includeReferencedFileTool: options.includeReferencedFileTool,
 	});
 	let lastSavedMarkdownPath: string | undefined;
+	const referencedFilesRead: ReferencedFileSummary[] = [];
 
 	for (let round = 0; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
 		if (response.toolCalls.length === 0) {
 			return {
 				text: response.text,
-				sourcesAppendix: response.sourcesAppendix,
+				sourcesAppendix: `${response.sourcesAppendix}${formatReferencedFileAppendix(referencedFilesRead)}`,
 				lastSavedMarkdownPath,
 			};
 		}
 
 		const toolOutputs = [];
 		for (const toolCall of response.toolCalls) {
-			if (toolCall.name !== MARKDOWN_FILE_TOOL_NAME) {
-				toolOutputs.push(
-					buildFunctionCallOutput(toolCall.call_id, {
-						status: "validation_error",
-						message: `Unsupported tool call: ${toolCall.name}`,
-					}),
-				);
+			if (toolCall.name === MARKDOWN_FILE_TOOL_NAME && options.includeMarkdownFileTool) {
+				const result = await executeMarkdownWriteToolCall(app, toolCall.arguments, undefined, {
+					onSaving: (path) => {
+						requestStatus.setSaving(path);
+					},
+					onWaitingForApproval: () => {
+						requestStatus.setWaitingForFileApproval();
+					},
+				});
+				if (result.status === "success" && result.path) {
+					lastSavedMarkdownPath = result.path;
+				}
+				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
 				continue;
 			}
 
-			const result = await executeMarkdownWriteToolCall(app, toolCall.arguments, undefined, {
-				onSaving: (path) => {
-					requestStatus.setSaving(path);
-				},
-				onWaitingForApproval: () => {
-					requestStatus.setWaitingForFileApproval();
-				},
-			});
-			if (result.status === "success" && result.path) {
-				lastSavedMarkdownPath = result.path;
+			if (toolCall.name === REFERENCED_FILE_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
+				const result = await executeReferencedFileReadToolCall(app, toolCall.arguments, options.referencedFileReadState);
+				registerReferencedFileResult(app, options.referencedFileReadState, result);
+				if (result.status === "success" && result.path) {
+					referencedFilesRead.push({
+						path: result.path,
+						truncated: Boolean(result.truncated),
+					});
+				}
+				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
+				continue;
 			}
-			toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
+
+			toolOutputs.push(
+				buildFunctionCallOutput(toolCall.call_id, {
+					status: "validation_error",
+					message: `Unsupported tool call: ${toolCall.name}`,
+				}),
+			);
 		}
 
 		requestStatus.setCalling(model);
 		response = await client.createTurn({
-			includeMarkdownFileTool: true,
+			includeMarkdownFileTool: options.includeMarkdownFileTool,
+			includeReferencedFileTool: options.includeReferencedFileTool,
 			inputItems: toolOutputs,
 			previousResponseId: response.responseId,
 		});
@@ -337,12 +415,51 @@ async function runMarkdownFileToolConversation(
 	throw new Error("Convo GPT exceeded the markdown file tool round limit.");
 }
 
-function withMarkdownFileToolPolicy(messages: ChatMessage[], rememberedPath?: string): ChatMessage[] {
-	return [
-		...messages,
-		{
+function withToolPolicies(
+	messages: ChatMessage[],
+	options: {
+		includeMarkdownFileTool: boolean;
+		includeReferencedFileTool: boolean;
+		rememberedPath?: string;
+	},
+): ChatMessage[] {
+	const nextMessages = [...messages];
+
+	if (options.includeReferencedFileTool) {
+		nextMessages.push({
 			role: "system",
-			content: buildMarkdownFileToolPolicy(rememberedPath),
+			content: buildReferencedFileToolPolicy(),
+		});
+	}
+
+	if (options.includeMarkdownFileTool) {
+		nextMessages.push({
+			role: "system",
+			content: buildMarkdownFileToolPolicy(options.rememberedPath),
+		});
+	}
+
+	return nextMessages;
+}
+
+function registerReferencedFileResult(
+	app: App,
+	state: ReferencedFileReadState,
+	result: ReferencedFileReadToolResult,
+): void {
+	if (result.status !== "success" || !result.path || typeof result.content !== "string") {
+		return;
+	}
+
+	const file = app.vault.getAbstractFileByPath(result.path);
+	if (!(file instanceof TFile)) {
+		return;
+	}
+
+	addReferencedFileReadSeeds(app, state, [
+		{
+			currentFile: file,
+			content: result.content,
 		},
-	];
+	]);
 }

@@ -1,5 +1,5 @@
 import type { Plugin } from "obsidian";
-import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT } from "./constants";
+import { DEFAULT_MODEL, DEFAULT_REFERENCED_FILE_EXTENSIONS, DEFAULT_SYSTEM_PROMPT } from "./constants";
 import { sanitizeSettings } from "./frontmatter";
 import type { PluginSettings } from "./types";
 
@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
 	enableOpenAINativeWebSearch: true,
 	enableMarkdownFileTool: true,
+	enableReferencedFileReadTool: true,
+	referencedFileExtensions: [...DEFAULT_REFERENCED_FILE_EXTENSIONS],
 };
 
 export async function loadPluginSettings(plugin: Plugin): Promise<PluginSettings> {

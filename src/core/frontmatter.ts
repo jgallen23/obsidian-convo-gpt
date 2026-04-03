@@ -1,6 +1,6 @@
 import matter from "gray-matter";
 import { z } from "zod";
-import { DEFAULT_SYSTEM_PROMPT, LAST_SAVED_MARKDOWN_PATH_KEY } from "./constants";
+import { DEFAULT_REFERENCED_FILE_EXTENSIONS, DEFAULT_SYSTEM_PROMPT, LAST_SAVED_MARKDOWN_PATH_KEY } from "./constants";
 import type { NoteOverrides, ParsedNoteDocument, PluginSettings } from "./types";
 
 const booleanSchema = z.preprocess((value) => {
@@ -22,6 +22,13 @@ const stringArraySchema = z.preprocess((value) => {
 	}
 	return value;
 }, z.array(z.string().min(1)).default([]));
+
+const extensionListSchema = z.preprocess((value) => {
+	if (typeof value === "string") {
+		return value.split(",");
+	}
+	return value;
+}, z.array(z.string()).default([...DEFAULT_REFERENCED_FILE_EXTENSIONS]));
 
 const noteOverridesSchema = z
 	.object({
@@ -47,6 +54,8 @@ const settingsSchema = z.object({
 	defaultSystemPrompt: z.string().default(DEFAULT_SYSTEM_PROMPT),
 	enableOpenAINativeWebSearch: z.boolean().default(true),
 	enableMarkdownFileTool: z.boolean().default(true),
+	enableReferencedFileReadTool: z.boolean().default(true),
+	referencedFileExtensions: extensionListSchema,
 });
 
 const FRONTMATTER_BLOCK_REGEX = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -86,6 +95,7 @@ export function sanitizeSettings(data: unknown): PluginSettings {
 	return {
 		...parsed,
 		defaultSystemPrompt: parsed.defaultSystemPrompt || DEFAULT_SYSTEM_PROMPT,
+		referencedFileExtensions: normalizeReferencedFileExtensions(parsed.referencedFileExtensions),
 	};
 }
 
@@ -105,4 +115,16 @@ export function persistLastSavedMarkdownPath(text: string, path: string): string
 	const data = typeof parsed.data === "object" && parsed.data !== null ? { ...parsed.data } : {};
 	data[LAST_SAVED_MARKDOWN_PATH_KEY] = path;
 	return matter.stringify(parsed.content, data);
+}
+
+export function normalizeReferencedFileExtensions(extensions: string[]): string[] {
+	const normalized = Array.from(
+		new Set(
+			extensions
+				.map((extension) => extension.trim().toLowerCase().replace(/^\./, ""))
+				.filter((extension) => extension.length > 0),
+		),
+	);
+
+	return normalized.length > 0 ? normalized : [...DEFAULT_REFERENCED_FILE_EXTENSIONS];
 }
