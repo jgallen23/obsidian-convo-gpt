@@ -8,7 +8,10 @@ OpenAI-first markdown-native conversations inside Obsidian notes.
 - OpenAI-only requests with per-note frontmatter overrides
 - Agent prompts loaded from a configurable agent folder
 - On-demand linked file reads for chat notes and agent prompts, with configurable supported extensions
+- On-demand HTTP fetch tool for explicit `http(s)` URLs with custom headers and basic API-call support
+- Markdown file save tool for creating or updating other notes with approval
 - OpenAI native `web_search`
+- Bottom-of-answer appendices for web sources, referenced files, and fetch calls when used
 - Jump links at the end of every assistant response
 
 ## Development
@@ -85,6 +88,41 @@ System prompt assembly order:
 - `system_commands` from the agent, then from the note
 
 If `Agent folder` is blank, agents are effectively disabled. If a note still sets `agent: ...`, Convo GPT shows a notice and continues without the agent.
+
+## Tools
+
+Convo GPT can expose a small set of model tools during a chat turn when the current message calls for them.
+
+### Referenced file reads
+
+- The plugin can read linked files from the current chat note or active agent prompt on demand instead of inlining them up front.
+- Supported extensions are configurable in plugin settings. The default list is `md, txt, csv, json, yaml`.
+- When referenced files are used, the assistant appends a `### Referenced files` block at the bottom of the answer with clickable `[[wiki links]]`.
+
+### Fetch
+
+- The fetch tool is only exposed when the current user message includes an explicit `http://` or `https://` URL.
+- It supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, and `HEAD`.
+- Requests can include custom headers such as `Authorization` and `Content-Type`.
+- Response bodies are returned to the model as text and may be truncated.
+- When fetch is used successfully, the assistant appends a `### Fetch calls` block at the bottom of the answer with method, URL, and status code.
+
+### Markdown file saves
+
+- The markdown save tool lets the model create, replace, append to, or inspect another vault markdown file.
+- Writes require explicit user approval before they are applied.
+- The tool is intended for `.md` files only.
+
+## Settings
+
+Notable plugin settings:
+
+- `Agent folder`: folder used to resolve markdown-based agents by basename.
+- `Enable OpenAI native web search`: enables provider-native `web_search` when the selected model supports it.
+- `Enable fetch tool`: allows the model to make outbound HTTP or HTTPS requests for explicit URLs.
+- `Enable markdown file save tool`: allows the model to request markdown file writes with approval.
+- `Enable referenced file read tool`: allows the model to read linked files on demand.
+- `Referenced file extensions`: comma-separated list of readable linked file extensions.
 
 ## Quality checks
 
