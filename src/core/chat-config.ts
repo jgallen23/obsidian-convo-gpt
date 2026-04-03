@@ -24,6 +24,7 @@ export function resolveChatConfig(
 			agentOverrides?.openai_native_web_search ??
 			settings.enableOpenAINativeWebSearch,
 		defaultSystemPrompt: settings.defaultSystemPrompt,
+		enableFetchTool: settings.enableFetchTool,
 		enableMarkdownFileTool: settings.enableMarkdownFileTool,
 		enableReferencedFileReadTool: settings.enableReferencedFileReadTool,
 		referencedFileExtensions: settings.referencedFileExtensions,

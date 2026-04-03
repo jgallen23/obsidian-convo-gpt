@@ -174,6 +174,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		agentFolder: "",
 		defaultSystemPrompt: "Be concise.",
 		enableOpenAINativeWebSearch: true,
+		enableFetchTool: true,
 		enableMarkdownFileTool: true,
 		enableReferencedFileReadTool: true,
 		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],

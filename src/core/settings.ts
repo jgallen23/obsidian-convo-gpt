@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	agentFolder: "",
 	defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
 	enableOpenAINativeWebSearch: true,
+	enableFetchTool: true,
 	enableMarkdownFileTool: true,
 	enableReferencedFileReadTool: true,
 	referencedFileExtensions: [...DEFAULT_REFERENCED_FILE_EXTENSIONS],

@@ -3,6 +3,14 @@ import { resolveAgent } from "./agent-resolver";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
 import { parseNoteDocument, persistLastSavedMarkdownPath } from "./frontmatter";
+import { executeFetchToolCall } from "./fetch-service";
+import {
+	buildFetchToolPolicy,
+	FETCH_TOOL_NAME,
+	formatFetchAppendix,
+	shouldOfferFetchTool,
+	type FetchSummary,
+} from "./fetch-tool";
 import { executeMarkdownWriteToolCall } from "./markdown-file-service";
 import {
 	addReferencedFileReadSeeds,
@@ -140,6 +148,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let completionText = "";
 	let sourcesAppendix = "";
 	let shouldPlaceFinalCursor = true;
+	const shouldUseFetchTool = shouldOfferFetchTool(lastMessage.content, config.enableFetchTool);
 	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(
 		lastMessage.content,
 		config.enableMarkdownFileTool,
@@ -154,11 +163,12 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		requestStatus.notifyRequestStart(`Calling ${config.model}`);
 		requestStatus.setCalling(config.model);
 
-		if (shouldUseMarkdownFileTool || shouldUseReferencedFileTool) {
+		if (shouldUseFetchTool || shouldUseMarkdownFileTool || shouldUseReferencedFileTool) {
 			const completion = await runToolConversation(
 				app,
 				client,
 				withToolPolicies(messages, {
+					includeFetchTool: shouldUseFetchTool,
 					includeMarkdownFileTool: shouldUseMarkdownFileTool,
 					includeReferencedFileTool: shouldUseReferencedFileTool,
 					rememberedPath: document.lastSavedMarkdownPath,
@@ -166,6 +176,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 				config.model,
 				requestStatus,
 				{
+					includeFetchTool: shouldUseFetchTool,
 					includeMarkdownFileTool: shouldUseMarkdownFileTool,
 					includeReferencedFileTool: shouldUseReferencedFileTool,
 					referencedFileReadState,
@@ -334,6 +345,7 @@ function clearRange(editor: Editor, range: OffsetRange): number {
 }
 
 interface ToolConversationOptions {
+	includeFetchTool: boolean;
 	includeMarkdownFileTool: boolean;
 	includeReferencedFileTool: boolean;
 	referencedFileReadState?: ReferencedFileReadState;
@@ -349,9 +361,11 @@ async function runToolConversation(
 ): Promise<OpenAICompletion & { lastSavedMarkdownPath?: string }> {
 	let response = await client.createTurn({
 		messages,
+		includeFetchTool: options.includeFetchTool,
 		includeMarkdownFileTool: options.includeMarkdownFileTool,
 		includeReferencedFileTool: options.includeReferencedFileTool,
 	});
+	const fetchCalls: FetchSummary[] = [];
 	let lastSavedMarkdownPath: string | undefined;
 	const referencedFilesRead: ReferencedFileSummary[] = [];
 
@@ -359,13 +373,27 @@ async function runToolConversation(
 		if (response.toolCalls.length === 0) {
 			return {
 				text: response.text,
-				sourcesAppendix: `${response.sourcesAppendix}${formatReferencedFileAppendix(referencedFilesRead)}`,
+				sourcesAppendix: `${response.sourcesAppendix}${formatReferencedFileAppendix(referencedFilesRead)}${formatFetchAppendix(fetchCalls)}`,
 				lastSavedMarkdownPath,
 			};
 		}
 
 		const toolOutputs = [];
 		for (const toolCall of response.toolCalls) {
+			if (toolCall.name === FETCH_TOOL_NAME && options.includeFetchTool) {
+				const result = await executeFetchToolCall(toolCall.arguments);
+				if (result.status === "success" && result.method && result.statusCode && (result.finalUrl || result.url)) {
+					fetchCalls.push({
+						method: result.method,
+						statusCode: result.statusCode,
+						truncated: Boolean(result.truncated),
+						url: result.finalUrl || result.url!,
+					});
+				}
+				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
+				continue;
+			}
+
 			if (toolCall.name === MARKDOWN_FILE_TOOL_NAME && options.includeMarkdownFileTool) {
 				const result = await executeMarkdownWriteToolCall(app, toolCall.arguments, undefined, {
 					onSaving: (path) => {
@@ -405,6 +433,7 @@ async function runToolConversation(
 
 		requestStatus.setCalling(model);
 		response = await client.createTurn({
+			includeFetchTool: options.includeFetchTool,
 			includeMarkdownFileTool: options.includeMarkdownFileTool,
 			includeReferencedFileTool: options.includeReferencedFileTool,
 			inputItems: toolOutputs,
@@ -418,12 +447,20 @@ async function runToolConversation(
 function withToolPolicies(
 	messages: ChatMessage[],
 	options: {
+		includeFetchTool: boolean;
 		includeMarkdownFileTool: boolean;
 		includeReferencedFileTool: boolean;
 		rememberedPath?: string;
 	},
 ): ChatMessage[] {
 	const nextMessages = [...messages];
+
+	if (options.includeFetchTool) {
+		nextMessages.push({
+			role: "system",
+			content: buildFetchToolPolicy(),
+		});
+	}
 
 	if (options.includeReferencedFileTool) {
 		nextMessages.push({

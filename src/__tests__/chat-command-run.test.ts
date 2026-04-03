@@ -63,12 +63,14 @@ import type { AgentDefinition, PluginSettings } from "../core/types";
 
 const {
 	resolveAgentMock,
+	executeFetchToolCallMock,
 	executeMarkdownWriteToolCallMock,
 	createTurnMock,
 	createMock,
 	streamMock,
 } = vi.hoisted(() => ({
 	resolveAgentMock: vi.fn<() => Promise<AgentDefinition | null>>(),
+	executeFetchToolCallMock: vi.fn(),
 	executeMarkdownWriteToolCallMock: vi.fn(),
 	createTurnMock: vi.fn(),
 	createMock: vi.fn(),
@@ -84,6 +86,14 @@ vi.mock("../core/markdown-file-service", async () => {
 	return {
 		...(actual as object),
 		executeMarkdownWriteToolCall: executeMarkdownWriteToolCallMock,
+	};
+});
+
+vi.mock("../core/fetch-service", async () => {
+	const actual = await vi.importActual("../core/fetch-service");
+	return {
+		...(actual as object),
+		executeFetchToolCall: executeFetchToolCallMock,
 	};
 });
 
@@ -107,6 +117,19 @@ describe("runChatCommand", () => {
 	beforeEach(() => {
 		resolveAgentMock.mockReset();
 		resolveAgentMock.mockResolvedValue(null);
+		executeFetchToolCallMock.mockReset();
+		executeFetchToolCallMock.mockResolvedValue({
+			status: "success",
+			message: "Fetched GET https://api.example.com/users with status 200.",
+			method: "GET",
+			url: "https://api.example.com/users",
+			finalUrl: "https://api.example.com/users",
+			statusCode: 200,
+			statusText: "OK",
+			headers: { "content-type": "application/json" },
+			bodyText: '{"ok":true}',
+			truncated: false,
+		});
 		executeMarkdownWriteToolCallMock.mockReset();
 		executeMarkdownWriteToolCallMock.mockResolvedValue({
 			status: "success",
@@ -333,6 +356,61 @@ describe("runChatCommand", () => {
 		expect(editor.getValue()).toContain("### Referenced files");
 		expect(editor.getValue()).toContain("[[Docs/Brief.md]]");
 	});
+
+	it("can process fetch calls and append a fetch summary", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_fetch",
+						name: "fetch",
+						arguments: JSON.stringify({
+							url: "https://api.example.com/users",
+							method: "GET",
+							headers: [{ name: "Authorization", value: "Bearer token" }],
+							body: null,
+						}),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Fetched the users.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const editor = createEditor("# _You (1)_\n\nFetch https://api.example.com/users with an Authorization header.");
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		const firstTurn = createTurnMock.mock.calls[0]?.[0];
+		expect(firstTurn.includeFetchTool).toBe(true);
+		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("HTTP fetch tool policy"))).toBe(true);
+
+		const secondTurn = createTurnMock.mock.calls[1]?.[0];
+		expect(JSON.parse(secondTurn.inputItems[0].output)).toMatchObject({
+			status: "success",
+			method: "GET",
+			url: "https://api.example.com/users",
+			statusCode: 200,
+		});
+		expect(executeFetchToolCallMock).toHaveBeenCalledTimes(1);
+		expect(editor.getValue()).toContain("### Fetch calls");
+		expect(editor.getValue()).toContain("GET [https://api.example.com/users](https://api.example.com/users) -> 200");
+	});
 });
 
 function buildApp(noteFile: TFile, linkMap: Record<string, TFile>, fileContents: Record<string, string>) {
@@ -363,6 +441,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		agentFolder: "Agents",
 		defaultSystemPrompt: "Be concise.",
 		enableOpenAINativeWebSearch: true,
+		enableFetchTool: true,
 		enableMarkdownFileTool: true,
 		enableReferencedFileReadTool: true,
 		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],

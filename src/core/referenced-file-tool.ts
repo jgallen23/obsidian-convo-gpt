@@ -54,7 +54,7 @@ export function getReferencedFileToolDefinition(): FunctionTool {
 export function buildReferencedFileToolPolicy(): string {
 	return [
 		"Referenced file read policy:",
-		"- Linked .md and .csv files from the current chat note and the active agent prompt are available through read_referenced_file instead of being preloaded.",
+		"- Linked supported files from the current chat note and the active agent prompt are available through read_referenced_file instead of being preloaded.",
 		"- Call read_referenced_file when you need the contents of a linked file.",
 		"- You may follow links found inside files that were successfully read earlier in this turn.",
 		"- Never claim you read a file unless read_referenced_file returned status success in this turn.",

@@ -37,6 +37,7 @@ Hello`;
 		const settings = sanitizeSettings({});
 		expect(settings.defaultModel).toBe("openai@gpt-5.4");
 		expect(settings.enableOpenAINativeWebSearch).toBe(true);
+		expect(settings.enableFetchTool).toBe(true);
 		expect(settings.enableMarkdownFileTool).toBe(true);
 		expect(settings.enableReferencedFileReadTool).toBe(true);
 		expect(settings.referencedFileExtensions).toEqual(["md", "txt", "csv", "json", "yaml"]);

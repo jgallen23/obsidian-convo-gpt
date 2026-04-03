@@ -117,6 +117,15 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Enable fetch tool")
+			.setDesc("Lets the model make outbound HTTP and HTTPS requests with custom headers.")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableFetchTool).onChange(async (value) => {
+					await this.plugin.updateSettings({ enableFetchTool: value });
+				}),
+			);
+
+		new Setting(containerEl)
 			.setName("Enable markdown file save tool")
 			.setDesc("Lets the model request approval to create or update other markdown files in the vault.")
 			.addToggle((toggle) =>

@@ -13,6 +13,9 @@ import {
 	supportsOpenAINativeWebSearch,
 } from "./openai-native-web-search";
 import {
+	getFetchToolDefinition,
+} from "./fetch-tool";
+import {
 	getMarkdownFileToolDefinition,
 } from "./markdown-file-tool";
 import {
@@ -35,6 +38,7 @@ export interface OpenAITurn {
 }
 
 export interface CreateTurnParams {
+	includeFetchTool?: boolean;
 	includeMarkdownFileTool?: boolean;
 	includeReferencedFileTool?: boolean;
 	inputItems?: ResponseInputItem[];
@@ -135,6 +139,10 @@ export class OpenAIClient {
 				type: "web_search_preview",
 				search_context_size: "medium",
 			});
+		}
+
+		if (params.includeFetchTool) {
+			tools.push(getFetchToolDefinition());
 		}
 
 		if (params.includeMarkdownFileTool) {

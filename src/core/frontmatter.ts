@@ -53,6 +53,7 @@ const settingsSchema = z.object({
 	agentFolder: z.string().default(""),
 	defaultSystemPrompt: z.string().default(DEFAULT_SYSTEM_PROMPT),
 	enableOpenAINativeWebSearch: z.boolean().default(true),
+	enableFetchTool: z.boolean().default(true),
 	enableMarkdownFileTool: z.boolean().default(true),
 	enableReferencedFileReadTool: z.boolean().default(true),
 	referencedFileExtensions: extensionListSchema,
