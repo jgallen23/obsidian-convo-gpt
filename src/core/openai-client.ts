@@ -1,3 +1,4 @@
+import manifestJson from "../../manifest.json";
 import OpenAI from "openai";
 import type { Responses } from "openai/resources/responses/responses";
 import type {
@@ -24,6 +25,10 @@ import {
 } from "./referenced-file-tool";
 import { createOpenAIFetchAdapter } from "./openai-fetch";
 import type { ChatMessage, ResolvedChatConfig } from "./types";
+
+const OPENAI_REQUEST_METADATA = {
+	"obsidian-convo": manifestJson.version,
+} as const;
 
 export interface OpenAICompletion {
 	text: string;
@@ -114,6 +119,7 @@ export class OpenAIClient {
 			model: normalizedModel,
 			input: history,
 			instructions: systemMessages.map((message) => message.content).join("\n\n") || undefined,
+			metadata: OPENAI_REQUEST_METADATA,
 			temperature: this.config.temperature,
 			max_output_tokens: this.config.max_tokens,
 		};
@@ -166,6 +172,7 @@ export class OpenAIClient {
 				model: normalizedModel,
 				input: history,
 				instructions: systemMessages.map((message) => message.content).join("\n\n") || undefined,
+				metadata: OPENAI_REQUEST_METADATA,
 				temperature: this.config.temperature,
 				max_output_tokens: this.config.max_tokens,
 				tools: tools.length > 0 ? tools : undefined,
@@ -177,6 +184,7 @@ export class OpenAIClient {
 		return {
 			model: normalizedModel,
 			input: params.inputItems ?? [],
+			metadata: OPENAI_REQUEST_METADATA,
 			previous_response_id: params.previousResponseId,
 			temperature: this.config.temperature,
 			max_output_tokens: this.config.max_tokens,
@@ -213,6 +221,10 @@ export class OpenAIClient {
 
 export function normalizeModelId(model: string): string {
 	return model.startsWith("openai@") ? model.slice("openai@".length) : model;
+}
+
+export function getOpenAIRequestMetadata(): Record<string, string> {
+	return { ...OPENAI_REQUEST_METADATA };
 }
 
 function extractText(response: unknown): string {
