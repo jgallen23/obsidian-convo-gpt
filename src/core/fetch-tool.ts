@@ -5,6 +5,8 @@ export const FETCH_TOOL_NAME = "fetch";
 
 const FETCH_METHODS = ["DELETE", "GET", "HEAD", "PATCH", "POST", "PUT"] as const;
 const URL_REGEX = /\bhttps?:\/\/[^\s)]+/i;
+const EXPLICIT_FETCH_INTENT_REGEX =
+	/\b(fetch|call|make (an? )?request|send (an? )?(request|get|post|put|patch|delete|head)|authorization|bearer|header|headers|use this api|use this endpoint|hit this api|hit this endpoint|curl)\b/i;
 
 export interface FetchHeader {
 	name: string;
@@ -76,7 +78,7 @@ export function shouldOfferFetchTool(message: string, enabled: boolean): boolean
 		return false;
 	}
 
-	return URL_REGEX.test(message);
+	return URL_REGEX.test(message) && EXPLICIT_FETCH_INTENT_REGEX.test(message);
 }
 
 export function getFetchToolDefinition(): FunctionTool {
@@ -130,7 +132,7 @@ export function getFetchToolDefinition(): FunctionTool {
 export function buildFetchToolPolicy(): string {
 	return [
 		"HTTP fetch tool policy:",
-		"- Use fetch for outbound HTTP or HTTPS calls to APIs and webpages.",
+		"- Use fetch only when the user explicitly asks you to make a specific HTTP or HTTPS request to a concrete URL.",
 		"- Supported methods are GET, POST, PUT, PATCH, DELETE, and HEAD.",
 		"- You may set request headers explicitly, including Authorization.",
 		"- Response bodies may be truncated.",

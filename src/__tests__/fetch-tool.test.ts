@@ -11,8 +11,16 @@ describe("fetch tool", () => {
 		expect(shouldOfferFetchTool("Call https://api.example.com/users with an Authorization header.", true)).toBe(true);
 	});
 
+	it("does not offer the tool for a bare url without explicit fetch intent", () => {
+		expect(shouldOfferFetchTool("https://api.example.com/users", true)).toBe(false);
+	});
+
 	it("does not offer the tool without an explicit url", () => {
 		expect(shouldOfferFetchTool("What's a good public JSON API I can hit?", true)).toBe(false);
+	});
+
+	it("does not offer the tool for a general web lookup with a url", () => {
+		expect(shouldOfferFetchTool("Summarize https://example.com for me.", true)).toBe(false);
 	});
 
 	it("does not offer the tool for plain writing requests", () => {

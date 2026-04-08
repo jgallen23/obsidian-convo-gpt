@@ -411,6 +411,27 @@ describe("runChatCommand", () => {
 		expect(editor.getValue()).toContain("### Fetch calls");
 		expect(editor.getValue()).toContain("GET [https://api.example.com/users](https://api.example.com/users) -> 200");
 	});
+
+	it("does not expose fetch for a plain url without explicit request intent", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		createMock.mockResolvedValue({
+			text: "I can help analyze that URL.",
+			sourcesAppendix: "",
+		});
+
+		const editor = createEditor("# _You (1)_\n\nhttps://api.example.com/users");
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(createTurnMock).not.toHaveBeenCalled();
+		expect(createMock).toHaveBeenCalledTimes(1);
+	});
 });
 
 function buildApp(noteFile: TFile, linkMap: Record<string, TFile>, fileContents: Record<string, string>) {
