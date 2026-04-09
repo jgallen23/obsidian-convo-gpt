@@ -2,6 +2,10 @@ export interface StatusBarLike {
 	setText(text: string): void;
 }
 
+export interface NoticeLike {
+	hide(): void;
+}
+
 export interface RequestStatusManager {
 	clear(): void;
 	notifyRequestStart(text: string): void;
@@ -15,24 +19,27 @@ export interface RequestStatusManager {
 }
 
 export class PluginRequestStatusManager implements RequestStatusManager {
+	private activeRequestNotice: NoticeLike | null = null;
+
 	constructor(
 		private readonly statusBarItem: StatusBarLike,
 		private readonly isMobile: boolean,
-		private readonly noticeNotifier: (text: string) => void,
+		private readonly noticeFactory: (text: string, duration?: number) => NoticeLike,
 	) {}
 
 	clear(): void {
 		this.statusBarItem.setText("");
+		this.activeRequestNotice?.hide();
+		this.activeRequestNotice = null;
 	}
 
 	notifyRequestStart(text: string): void {
-		if (this.isMobile) {
-			this.noticeNotifier(`Convo GPT: ${text}`);
-		}
+		this.activeRequestNotice?.hide();
+		this.activeRequestNotice = this.noticeFactory(`Convo GPT: ${text}`, 0);
 	}
 
 	notifyToolUse(text: string): void {
-		this.noticeNotifier(`Convo GPT: ${text}`);
+		this.noticeFactory(`Convo GPT: ${text}`);
 	}
 
 	setCalling(model: string): void {

@@ -19,6 +19,7 @@ export interface NoteOverrides {
 	max_tokens?: number;
 	stream?: boolean;
 	agent?: string;
+	document?: string;
 	system_commands?: string[];
 	baseUrl?: string;
 	openai_native_web_search?: boolean;

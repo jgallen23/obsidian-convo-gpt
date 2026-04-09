@@ -362,6 +362,273 @@ describe("runChatCommand", () => {
 		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Saving markdown file: Stories/story.md");
 	});
 
+	it("injects linked document context and auto-writes the bound file without explicit restatement", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const proposalFile = createFile("Docs/Proposal.md");
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_write",
+						name: "save_markdown_file",
+						arguments: JSON.stringify({
+							path: "Docs/Proposal.md",
+							operation: "replace",
+							content: "# Proposal\n\nShorter copy.",
+							instructions: null,
+							reason: "Apply the requested revision.",
+						}),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Revised the proposal in `Docs/Proposal.md`.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const editor = createEditor(`---
+document: "[[Docs/Proposal]]"
+---
+# _You (1)_
+
+Make it shorter.`);
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"Docs/Proposal|Notes/Chat.md": proposalFile,
+				},
+				{
+					"Docs/Proposal.md": "# Proposal\n\nLonger draft.",
+				},
+			) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		const firstTurn = createTurnMock.mock.calls[0]?.[0];
+		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("Linked document mode is active"))).toBe(true);
+		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("Longer draft."))).toBe(true);
+		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.any(String),
+			undefined,
+			expect.objectContaining({
+				trustedPaths: new Set(["Docs/Proposal.md"]),
+			}),
+		);
+		expect(editor.getValue()).toContain("Revised the proposal in [[Docs/Proposal]].");
+	});
+
+	it("loads linked document content for read-only turns without exposing the save tool", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const proposalFile = createFile("Docs/Proposal.md");
+		createMock.mockResolvedValue({
+			text: "Summary only.",
+			sourcesAppendix: "",
+		});
+
+		const editor = createEditor(`---
+document: "[[Docs/Proposal]]"
+stream: false
+---
+# _You (1)_
+
+Summarize the current draft.`);
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"Docs/Proposal|Notes/Chat.md": proposalFile,
+				},
+				{
+					"Docs/Proposal.md": "# Proposal\n\nCurrent contents.",
+				},
+			) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(createTurnMock).not.toHaveBeenCalled();
+		const messages = createMock.mock.calls[0]?.[0];
+		expect(messages.some((message: { content: string }) => message.content.includes("Current contents."))).toBe(true);
+		expect(executeMarkdownWriteToolCallMock).not.toHaveBeenCalled();
+		expect(editor.getValue()).toContain("Summary only.");
+	});
+
+	it("infers and persists the linked document from the first explicit save target", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_write",
+						name: "save_markdown_file",
+						arguments: JSON.stringify({
+							path: "Stories/story.md",
+							operation: "create",
+							content: "# Story",
+							instructions: null,
+							reason: "Create the draft.",
+						}),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Created the story.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const editor = createEditor("# _You (1)_\n\nWrite a story and save it to Stories/story.md.");
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(editor.getValue()).toContain("document:");
+		expect(editor.getValue()).toContain("[[Stories/story]]");
+		expect(editor.getValue()).toContain("Created the story.");
+	});
+
+	it("infers the linked document from a sibling chat-note name", async () => {
+		const noteFile = createFile("document test/doc chat.md");
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_write",
+						name: "save_markdown_file",
+						arguments: JSON.stringify({
+							path: "document test/Story.md",
+							operation: "create",
+							content: "# Story\n\nOnce upon a time.",
+							instructions: null,
+							reason: "Create the requested story document.",
+						}),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Created the story document.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const editor = createEditor("help me create a story in a document");
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		const firstTurn = createTurnMock.mock.calls[0]?.[0];
+		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("document test/Story.md"))).toBe(true);
+		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.any(String),
+			undefined,
+			expect.objectContaining({
+				trustedPaths: new Set(["document test/Story.md"]),
+			}),
+		);
+		expect(editor.getValue()).toContain("[[document test/Story]]");
+		expect(editor.getValue()).toContain("Created the story document.");
+	});
+
+	it("continues document drafting across short follow-up replies", async () => {
+		const noteFile = createFile("document test/doc chat.md");
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_write",
+						name: "save_markdown_file",
+						arguments: JSON.stringify({
+							path: "document test/Story.md",
+							operation: "replace",
+							content: "# The Dragon with Allergies",
+							instructions: null,
+							reason: "Write the selected story into the document.",
+						}),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Wrote the story into the document.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const editor = createEditor(`---
+document: '[[document test/Story]]'
+---
+help me create a story in a document
+
+<hr class="__convo_gpt__">
+
+# _AI (1)_
+Give me the tone and style.
+
+<hr class="__convo_gpt__">
+# _You (2)_
+
+#3`);
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, { "document test/Story.md": "" }) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.any(String),
+			undefined,
+			expect.objectContaining({
+				trustedPaths: new Set(["document test/Story.md"]),
+			}),
+		);
+		expect(editor.getValue()).toContain("Wrote the story into the document.");
+	});
+
 	it("can process fetch calls and append a fetch summary", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 

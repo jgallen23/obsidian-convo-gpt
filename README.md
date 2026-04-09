@@ -10,6 +10,7 @@ OpenAI-first markdown-native conversations inside Obsidian notes.
 - On-demand linked file reads for chat notes and agent prompts, with configurable supported extensions
 - On-demand HTTP fetch tool for explicit `http(s)` URLs with custom headers and basic API-call support
 - Markdown file save tool for creating or updating other notes with approval
+- Linked document mode for proposal/email/article style drafting against a bound markdown file
 - OpenAI native `web_search`
 - Bottom-of-answer appendices for web sources, referenced files, and fetch calls when used
 - Jump links at the end of every assistant response
@@ -43,6 +44,7 @@ Example chat note:
 ```md
 ---
 agent: writing-coach
+document: [[Drafts/Proposal]]
 model: openai@gpt-5.4
 ---
 
@@ -74,6 +76,54 @@ How agent resolution works:
 - The file match is basename-based, so `agent: writing-coach` matches `writing-coach.md`.
 - The agent file body becomes a system prompt.
 - Supported agent frontmatter overrides are `model`, `temperature`, `max_tokens`, `stream`, `system_commands`, `baseUrl`, and `openai_native_web_search`.
+
+## Linked documents
+
+Chat notes can be bound to one markdown document that acts as the live drafting target for that note.
+
+How document mode activates:
+
+- Set `document: [[Drafts/Proposal]]` in the chat note frontmatter to bind the note to a document explicitly.
+- If `document` is not set yet, the plugin will infer and persist it from the first explicit markdown save target the user names, such as `Stories/story.md` or `[[Stories/story]]`.
+- If the chat note itself is named like `Something chat.md`, the plugin can infer a sibling linked document on first use even without an explicit target.
+
+How the linked document is named:
+
+- When inferring a linked document from a chat note, the plugin tries to name the document from the user's first request instead of defaulting to `doc.md`.
+- Example: `help me create a story in a document` can infer `[[Story]]`.
+- Example: `help me write an email in a document that asks a new lead to book a call with me` can infer a document name based on that request instead of `doc`.
+- If the request does not produce a usable title, the chat-note basename is used as a fallback.
+
+How document mode behaves:
+
+- On every chat turn, Convo GPT reads the latest contents of the linked document and includes them in the request context.
+- If the latest user message is asking for document changes, Convo GPT updates that bound file directly without asking for approval again.
+- Short follow-up replies in an ongoing drafting flow, such as `#3`, `funny and short`, or similar selection-style replies, continue document drafting instead of falling back to plain chat.
+- Clearly read-only requests such as summaries, discussion, or review should not write to the document.
+- For create, write, draft, compose, or update requests, document mode is intended to save to the linked document in the same turn rather than only returning pasteable text in chat.
+
+How document mode presents results:
+
+- Assistant replies that mention the linked document path are rewritten as clickable wiki links such as `[[Drafts/Proposal]]` instead of raw file paths like ``Drafts/Proposal.md``.
+- Writes without approval are limited to the bound linked document. Other markdown file writes still follow the normal approval flow.
+
+Example:
+
+```md
+---
+document: [[Drafts/Proposal]]
+---
+
+# _You (1)_
+
+Draft a short proposal for a consulting kickoff.
+```
+
+In that note:
+
+- The linked file `Drafts/Proposal.md` is loaded fresh on every turn.
+- A drafting request updates that file directly.
+- The assistant response should refer to the result as `[[Drafts/Proposal]]`.
 
 Merge precedence:
 
@@ -111,6 +161,7 @@ Convo GPT can expose a small set of model tools during a chat turn when the curr
 
 - The markdown save tool lets the model create, replace, append to, or inspect another vault markdown file.
 - The tool is only exposed when the user explicitly names the markdown target, such as `story.md`, `Stories/story.md`, or `[[Stories/story]]`.
+- Linked document mode is the exception: if the chat note is already bound to a `document`, edit requests can save to that bound file without the user restating the path.
 - Writes require explicit user approval before they are applied.
 - If the user asks to save without naming a target, the model should ask where to save instead of inferring a previous destination.
 - The tool is intended for `.md` files only.

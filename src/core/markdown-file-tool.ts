@@ -52,19 +52,28 @@ const markdownWriteRequestSchema = z
 
 const WIKI_LINK_REGEX = /\[\[[^[\]]+\]\]/;
 const MARKDOWN_LINK_REGEX = /\[[^\]]+\]\(([^)]+)\)/;
+const DIRECT_MARKDOWN_PATH_REGEX = /(^|[\s("'`])((?!https?:\/\/)(?:[\w.-]+\/)*[\w.-]+\.md)\b/gim;
+const EXPLICIT_WRITE_INTENT_REGEX = /\b(save|append|replace|update|edit|rewrite|create|write)\b/i;
 
-export function shouldOfferMarkdownFileTool(message: string, enabled: boolean): boolean {
+export function hasExplicitMarkdownWriteIntent(message: string): boolean {
+	return EXPLICIT_WRITE_INTENT_REGEX.test(message);
+}
+
+export function shouldOfferMarkdownFileTool(message: string, enabled: boolean, hasImplicitTarget = false): boolean {
 	if (!enabled) {
 		return false;
 	}
 
-	const normalized = message.toLowerCase();
-	const hasWriteIntent = /\b(save|append|replace|update|edit|rewrite|create|write)\b/.test(normalized);
+	if (hasImplicitTarget) {
+		return true;
+	}
+
+	const hasWriteIntent = hasExplicitMarkdownWriteIntent(message);
 	if (!hasWriteIntent) {
 		return false;
 	}
 
-	if (/\.md\b/.test(normalized)) {
+	if (new RegExp(DIRECT_MARKDOWN_PATH_REGEX).test(message)) {
 		return true;
 	}
 
@@ -80,6 +89,29 @@ export function shouldOfferMarkdownFileTool(message: string, enabled: boolean): 
 	}
 
 	return false;
+}
+
+export function extractExplicitMarkdownTarget(message: string): string | null {
+	const wikiMatch = message.match(WIKI_LINK_REGEX);
+	if (wikiMatch?.[0]) {
+		return wikiMatch[0];
+	}
+
+	for (const match of message.matchAll(new RegExp(MARKDOWN_LINK_REGEX, "g"))) {
+		const path = match[1]?.trim() ?? "";
+		if (path.toLowerCase().endsWith(".md")) {
+			return path;
+		}
+	}
+
+	for (const match of message.matchAll(new RegExp(DIRECT_MARKDOWN_PATH_REGEX))) {
+		const path = match[2]?.trim() ?? "";
+		if (path) {
+			return path;
+		}
+	}
+
+	return null;
 }
 
 export function buildMarkdownFileToolPolicy(): string {
@@ -225,4 +257,8 @@ export function buildMarkdownWritePreview(content: string | undefined, maxChars 
 	}
 
 	return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}\n…` : trimmed;
+}
+
+export function formatMarkdownWikiLink(path: string): string {
+	return `[[${path.replace(/\.md$/i, "")}]]`;
 }

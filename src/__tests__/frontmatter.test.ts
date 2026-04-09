@@ -3,6 +3,7 @@ import {
 	normalizeReferencedFileExtensions,
 	parseNoteDocument,
 	parseNoteOverrides,
+	setNoteFrontmatterField,
 	sanitizeSettings,
 	stripFrontmatter,
 } from "../core/frontmatter";
@@ -13,6 +14,7 @@ describe("frontmatter helpers", () => {
 		const text = `---
 model: openai@gpt-5.4
 temperature: 0.4
+document: "[[Drafts/Proposal]]"
 system_commands:
   - Be concise
 ---
@@ -23,6 +25,7 @@ Hello`;
 		const parsed = parseNoteDocument(text);
 		expect(parsed.overrides.model).toBe("openai@gpt-5.4");
 		expect(parsed.overrides.temperature).toBe(0.4);
+		expect(parsed.overrides.document).toBe("[[Drafts/Proposal]]");
 		expect(parsed.overrides.system_commands).toEqual(["Be concise"]);
 		expect(parsed.body.trim()).toContain("# role::user");
 		expect(parsed.bodyStartOffset).toBeGreaterThan(0);
@@ -55,5 +58,45 @@ Hello`;
 
 	it("normalizes referenced file extensions", () => {
 		expect(normalizeReferencedFileExtensions([".MD", " txt ", "", "json", "md"])).toEqual(["md", "txt", "json"]);
+	});
+
+	it("adds or updates a frontmatter field", () => {
+		expect(setNoteFrontmatterField("# Body", "document", "[[Drafts/Proposal]]")).toContain("document:");
+		expect(setNoteFrontmatterField("# Body", "document", "[[Drafts/Proposal]]")).toContain("[[Drafts/Proposal]]");
+		expect(setNoteFrontmatterField("---\nmodel: openai@gpt-5.4\n---\nBody", "document", "[[Drafts/Proposal]]")).toContain(
+			"[[Drafts/Proposal]]",
+		);
+	});
+
+	it("derives a sibling document reference from a chat note path", async () => {
+		const {
+			buildLinkedDocumentSystemPrompt,
+			buildLinkedDocumentToolPolicy,
+			deriveLinkedDocumentReferenceFromChatPath,
+			linkifyLinkedDocumentMentions,
+		} = await import("../core/document-mode");
+		expect(deriveLinkedDocumentReferenceFromChatPath("document test/doc chat.md", "help me create a story in a document")).toBe(
+			"[[document test/Story]]",
+		);
+		expect(deriveLinkedDocumentReferenceFromChatPath("Notes/Idea.md", "help me create a story in a document")).toBeNull();
+		expect(linkifyLinkedDocumentMentions("Done — wrote it to `document test/doc.md`.", "document test/doc.md")).toBe(
+			"Done — wrote it to [[document test/doc]].",
+		);
+		expect(
+			buildLinkedDocumentSystemPrompt({
+				path: "document test/doc.md",
+				content: "",
+				exists: false,
+				shouldAutoWrite: true,
+			}),
+		).toContain("do not stop at a draft-in-chat response");
+		expect(
+			buildLinkedDocumentToolPolicy({
+				path: "document test/doc.md",
+				content: "",
+				exists: false,
+				shouldAutoWrite: true,
+			}),
+		).toContain("you must call save_markdown_file before giving the final answer");
 	});
 });

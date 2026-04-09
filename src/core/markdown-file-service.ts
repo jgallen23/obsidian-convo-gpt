@@ -23,11 +23,16 @@ export interface MarkdownWriteStatusCallbacks {
 	onWaitingForApproval?: () => void;
 }
 
+export interface MarkdownWriteExecutionOptions {
+	statusCallbacks?: MarkdownWriteStatusCallbacks;
+	trustedPaths?: ReadonlySet<string>;
+}
+
 export async function executeMarkdownWriteToolCall(
 	app: App,
 	argumentsJson: string,
 	approver: MarkdownWriteApprover = (request) => requestMarkdownWriteApproval(app, request),
-	statusCallbacks: MarkdownWriteStatusCallbacks = {},
+	options: MarkdownWriteExecutionOptions = {},
 ): Promise<MarkdownWriteToolResult> {
 	const parsed = parseMarkdownWriteRequest(argumentsJson);
 	if (!parsed.success) {
@@ -37,15 +42,16 @@ export async function executeMarkdownWriteToolCall(
 		};
 	}
 
-	return executeMarkdownWriteRequest(app, parsed.data, approver, statusCallbacks);
+	return executeMarkdownWriteRequest(app, parsed.data, approver, options);
 }
 
 export async function executeMarkdownWriteRequest(
 	app: App,
 	request: MarkdownWriteRequest,
 	approver: MarkdownWriteApprover,
-	statusCallbacks: MarkdownWriteStatusCallbacks = {},
+	options: MarkdownWriteExecutionOptions = {},
 ): Promise<MarkdownWriteToolResult> {
+	const statusCallbacks = options.statusCallbacks ?? {};
 	const resolved = resolveMarkdownWriteTargetPath(app, request.path);
 	if (!resolved.success) {
 		return {
@@ -85,14 +91,15 @@ export async function executeMarkdownWriteRequest(
 		};
 	}
 
-	statusCallbacks.onWaitingForApproval?.();
-	const approval = await approver({
-		path: resolved.path,
-		operation: request.operation,
-		exists: existing instanceof TFile,
-		reason: request.reason?.trim() || "Model requested a markdown file change.",
-		preview: buildMarkdownWritePreview(request.content),
-	});
+	const approval = options.trustedPaths?.has(resolved.path)
+		? true
+		: await requestApproval(approver, statusCallbacks, {
+				path: resolved.path,
+				operation: request.operation,
+				exists: existing instanceof TFile,
+				reason: request.reason?.trim() || "Model requested a markdown file change.",
+				preview: buildMarkdownWritePreview(request.content),
+			});
 
 	if (!approval) {
 		return {
@@ -166,9 +173,10 @@ export async function executeMarkdownWriteRequest(
 	}
 }
 
-function resolveMarkdownWriteTargetPath(
+export function resolveMarkdownWriteTargetPath(
 	app: App,
 	rawPath: string,
+	currentPath = "",
 ): { path: string; success: true } | { error: string; success: false } {
 	const resolved = resolveMarkdownVaultPath(rawPath);
 	if (!resolved.success) {
@@ -180,7 +188,7 @@ function resolveMarkdownWriteTargetPath(
 		return resolved;
 	}
 
-	const linkedFile = app.metadataCache.getFirstLinkpathDest?.(explicitReference, "");
+	const linkedFile = app.metadataCache.getFirstLinkpathDest?.(explicitReference, currentPath);
 	if (linkedFile instanceof TFile && linkedFile.extension.toLowerCase() === "md") {
 		return {
 			success: true,
@@ -189,6 +197,15 @@ function resolveMarkdownWriteTargetPath(
 	}
 
 	return resolved;
+}
+
+async function requestApproval(
+	approver: MarkdownWriteApprover,
+	statusCallbacks: MarkdownWriteStatusCallbacks,
+	request: MarkdownWriteApprovalRequest,
+): Promise<boolean> {
+	statusCallbacks.onWaitingForApproval?.();
+	return approver(request);
 }
 
 export function requestMarkdownWriteApproval(app: App, request: MarkdownWriteApprovalRequest): Promise<boolean> {

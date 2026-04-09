@@ -49,6 +49,41 @@ describe("markdown file service", () => {
 		});
 		expect(process).toHaveBeenCalledWith(targetFile, expect.any(Function));
 	});
+
+	it("skips approval for trusted markdown paths", async () => {
+		const targetFile = createFile("Docs/proposal.md");
+		const modify = vi.fn(async () => undefined);
+		const approver = vi.fn(async () => false);
+
+		const result = await executeMarkdownWriteRequest(
+			{
+				metadataCache: {
+					getFirstLinkpathDest: () => null,
+				},
+				vault: {
+					getAbstractFileByPath: (path: string) => (path === targetFile.path ? targetFile : null),
+					modify,
+				},
+			} as never,
+			{
+				path: "Docs/proposal.md",
+				operation: "replace",
+				content: "# Updated",
+			},
+			approver,
+			{
+				trustedPaths: new Set(["Docs/proposal.md"]),
+			},
+		);
+
+		expect(result).toMatchObject({
+			status: "success",
+			path: "Docs/proposal.md",
+			operation: "replace",
+		});
+		expect(approver).not.toHaveBeenCalled();
+		expect(modify).toHaveBeenCalledWith(targetFile, "# Updated");
+	});
 });
 
 function createFile(path: string): TFile {

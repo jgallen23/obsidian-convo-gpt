@@ -21,8 +21,8 @@ export default class ConvoGptPlugin extends Plugin {
 		this.requestStatusManager = new PluginRequestStatusManager(
 			this.addStatusBarItem(),
 			Platform.isMobile,
-			(text) => {
-				new Notice(text);
+			(text, duration) => {
+				return new Notice(text, duration);
 			},
 		);
 		this.settings = await loadPluginSettings(this);

@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	buildMarkdownFileToolPolicy,
 	buildMarkdownWritePreview,
+	extractExplicitMarkdownTarget,
+	formatMarkdownWikiLink,
+	hasExplicitMarkdownWriteIntent,
 	parseMarkdownWriteRequest,
 	resolveMarkdownVaultPath,
 	shouldOfferMarkdownFileTool,
@@ -22,6 +25,12 @@ describe("markdown file tool", () => {
 
 	it("does not offer the tool for vague follow-up save requests without an explicit target", () => {
 		expect(shouldOfferMarkdownFileTool("Add another joke.", true)).toBe(false);
+	});
+
+	it("offers the tool for linked document edits with an implicit target", () => {
+		expect(shouldOfferMarkdownFileTool("Make it shorter.", true, true)).toBe(true);
+		expect(hasExplicitMarkdownWriteIntent("Update it.")).toBe(true);
+		expect(shouldOfferMarkdownFileTool("Update it.", true, true)).toBe(true);
 	});
 
 	it("parses valid create requests", () => {
@@ -72,6 +81,15 @@ describe("markdown file tool", () => {
 
 	it("builds truncated previews", () => {
 		expect(buildMarkdownWritePreview("a".repeat(900))).toContain("…");
+	});
+
+	it("extracts explicit markdown targets", () => {
+		expect(extractExplicitMarkdownTarget("Save it to [[Stories/story]].")).toBe("[[Stories/story]]");
+		expect(extractExplicitMarkdownTarget("Save it to Stories/story.md")).toBe("Stories/story.md");
+	});
+
+	it("formats wiki links from markdown paths", () => {
+		expect(formatMarkdownWikiLink("Stories/story.md")).toBe("[[Stories/story]]");
 	});
 
 	it("builds policy text that requires explicit targets", () => {

@@ -37,6 +37,7 @@ const noteOverridesSchema = z
 		max_tokens: z.number().int().positive().optional(),
 		stream: booleanSchema.optional(),
 		agent: z.string().min(1).optional(),
+		document: z.string().min(1).optional(),
 		system_commands: stringArraySchema.optional(),
 		baseUrl: z.string().url().optional(),
 		openai_native_web_search: booleanSchema.optional(),
@@ -108,4 +109,12 @@ export function normalizeReferencedFileExtensions(extensions: string[]): string[
 	);
 
 	return normalized.length > 0 ? normalized : [...DEFAULT_REFERENCED_FILE_EXTENSIONS];
+}
+
+export function setNoteFrontmatterField(text: string, key: string, value: string): string {
+	const parsed = matter(text);
+	return matter.stringify(parsed.content, {
+		...parsed.data,
+		[key]: value,
+	});
 }

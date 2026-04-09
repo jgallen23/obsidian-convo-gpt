@@ -2,7 +2,20 @@ import { Notice, TFile, type App, type Editor, type MarkdownView } from "obsidia
 import { resolveAgent } from "./agent-resolver";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
-import { parseNoteDocument } from "./frontmatter";
+import {
+	parseNoteDocument,
+	setNoteFrontmatterField,
+} from "./frontmatter";
+import {
+	buildLinkedDocumentSystemPrompt,
+	buildLinkedDocumentToolPolicy,
+	deriveLinkedDocumentReferenceFromChatPath,
+	detectLinkedDocumentEditIntent,
+	linkifyLinkedDocumentMentions,
+	loadLinkedDocumentContext,
+	shouldContinueLinkedDocumentDrafting,
+	type LinkedDocumentContext,
+} from "./document-mode";
 import { executeFetchToolCall } from "./fetch-service";
 import {
 	buildFetchToolPolicy,
@@ -12,7 +25,10 @@ import {
 	shouldOfferFetchTool,
 	type FetchSummary,
 } from "./fetch-tool";
-import { executeMarkdownWriteToolCall } from "./markdown-file-service";
+import {
+	executeMarkdownWriteToolCall,
+	resolveMarkdownWriteTargetPath,
+} from "./markdown-file-service";
 import {
 	addReferencedFileReadSeeds,
 	createReferencedFileReadState,
@@ -21,6 +37,9 @@ import {
 } from "./referenced-file-service";
 import {
 	buildMarkdownFileToolPolicy,
+	extractExplicitMarkdownTarget,
+	formatMarkdownWikiLink,
+	hasExplicitMarkdownWriteIntent,
 	MAX_MARKDOWN_TOOL_ROUNDS,
 	MARKDOWN_FILE_TOOL_NAME,
 	parseMarkdownWriteRequest,
@@ -65,16 +84,36 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let document: ReturnType<typeof parseNoteDocument>;
 	let config: ResolvedChatConfig;
 	let messages: ChatMessage[];
+	let linkedDocument: LinkedDocumentContext | undefined;
 	let referencedFileReadState: ReferencedFileReadState | undefined;
 
 	try {
 		exchangeId = getNextExchangeId(editor.getValue());
 		document = parseNoteDocument(editor.getValue());
-		const sections = parseSections(document.body);
+		let sections = parseSections(document.body);
 		if (sections.length === 0) {
 			new Notice("Convo GPT needs note content to send.");
 			return;
 		}
+
+		const lastSection = sections[sections.length - 1];
+		if (!lastSection || lastSection.role !== "user" || !lastSection.content.trim()) {
+			new Notice("Convo GPT expects the last message in the note to be a non-empty user message.");
+			return;
+		}
+
+		document = inferLinkedDocumentReference(app, file, editor, document, lastSection.content);
+		sections = parseSections(document.body);
+		linkedDocument = await resolveLinkedDocument(
+			app,
+			file,
+			document.overrides.document,
+			lastSection.content,
+			sections
+				.filter((section) => section.role === "user")
+				.slice(0, -1)
+				.map((section) => section.content),
+		);
 
 		const agent = await resolveAgent(app, settings, document.overrides.agent);
 		config = resolveChatConfig(settings, agent?.frontmatter, document.overrides);
@@ -125,6 +164,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			})),
 			config,
 			agentBody,
+			linkedDocument,
 		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -133,21 +173,21 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	}
 
 	const lastMessage = messages[messages.length - 1];
-	if (!lastMessage || lastMessage.role !== "user" || !lastMessage.content.trim()) {
-		new Notice("Convo GPT expects the last message in the note to be a non-empty user message.");
-		return;
-	}
-
 	const assistantPrefix = buildAssistantPrefix(config.model, exchangeId);
 	let writeOffset = editor.getValue().length;
 	editor.replaceRange(assistantPrefix, editor.offsetToPos(writeOffset));
 	writeOffset += assistantPrefix.length;
+	const completionStartOffset = writeOffset;
 
 	let completionText = "";
 	let sourcesAppendix = "";
 	let shouldPlaceFinalCursor = true;
 	const shouldUseFetchTool = shouldOfferFetchTool(lastMessage.content, config.enableFetchTool);
-	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(lastMessage.content, config.enableMarkdownFileTool);
+	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(
+		lastMessage.content,
+		config.enableMarkdownFileTool,
+		Boolean(linkedDocument?.shouldAutoWrite),
+	);
 	const shouldUseReferencedFileTool = Boolean(
 		config.enableReferencedFileReadTool && referencedFileReadState && referencedFileReadState.allowedPaths.size > 0,
 	);
@@ -165,6 +205,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					includeFetchTool: shouldUseFetchTool,
 					includeMarkdownFileTool: shouldUseMarkdownFileTool,
 					includeReferencedFileTool: shouldUseReferencedFileTool,
+					linkedDocument,
 				}),
 				config.model,
 				requestStatus,
@@ -172,11 +213,13 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					includeFetchTool: shouldUseFetchTool,
 					includeMarkdownFileTool: shouldUseMarkdownFileTool,
 					includeReferencedFileTool: shouldUseReferencedFileTool,
+					linkedDocument,
 					referencedFileReadState,
 				},
 			);
 			completionText = completion.text;
 			sourcesAppendix = completion.sourcesAppendix;
+			completionText = postProcessCompletionText(completionText, linkedDocument);
 			editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
 			writeOffset += completionText.length;
 		} else if (config.stream) {
@@ -201,11 +244,17 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			writer.stop();
 			writeOffset = editor.posToOffset(writer.getCursor());
 			shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
+			const nextCompletionText = postProcessCompletionText(completionText, linkedDocument);
+			if (nextCompletionText !== completionText) {
+				editor.replaceRange(nextCompletionText, editor.offsetToPos(completionStartOffset), editor.offsetToPos(writeOffset));
+				writeOffset = completionStartOffset + nextCompletionText.length;
+				completionText = nextCompletionText;
+			}
 
 			sourcesAppendix = completion.sourcesAppendix;
 		} else {
 			const completion = await client.create(messages);
-			completionText = completion.text;
+			completionText = postProcessCompletionText(completion.text, linkedDocument);
 			sourcesAppendix = completion.sourcesAppendix;
 			editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
 			writeOffset += completionText.length;
@@ -237,6 +286,7 @@ async function buildMessages(
 	baseMessages: ChatMessage[],
 	config: ResolvedChatConfig,
 	agentBody: string,
+	linkedDocument?: LinkedDocumentContext,
 ): Promise<ChatMessage[]> {
 	const messages: ChatMessage[] = [];
 
@@ -251,6 +301,13 @@ async function buildMessages(
 		messages.push({
 			role: "system",
 			content: agentBody.trim(),
+		});
+	}
+
+	if (linkedDocument) {
+		messages.push({
+			role: "system",
+			content: buildLinkedDocumentSystemPrompt(linkedDocument),
 		});
 	}
 
@@ -292,6 +349,7 @@ interface ToolConversationOptions {
 	includeFetchTool: boolean;
 	includeMarkdownFileTool: boolean;
 	includeReferencedFileTool: boolean;
+	linkedDocument?: LinkedDocumentContext;
 	referencedFileReadState?: ReferencedFileReadState;
 }
 
@@ -340,12 +398,18 @@ async function runToolConversation(
 			if (toolCall.name === MARKDOWN_FILE_TOOL_NAME && options.includeMarkdownFileTool) {
 				requestStatus.notifyToolUse(describeMarkdownToolCall(toolCall.arguments));
 				const result = await executeMarkdownWriteToolCall(app, toolCall.arguments, undefined, {
-					onSaving: (path) => {
-						requestStatus.setSaving(path);
+					statusCallbacks: {
+						onSaving: (path) => {
+							requestStatus.setSaving(path);
+						},
+						onWaitingForApproval: () => {
+							requestStatus.setWaitingForFileApproval();
+						},
 					},
-					onWaitingForApproval: () => {
-						requestStatus.setWaitingForFileApproval();
-					},
+					trustedPaths:
+						options.linkedDocument?.shouldAutoWrite === true
+							? new Set([options.linkedDocument.path])
+							: undefined,
 				});
 				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
 				continue;
@@ -420,6 +484,7 @@ function withToolPolicies(
 		includeFetchTool: boolean;
 		includeMarkdownFileTool: boolean;
 		includeReferencedFileTool: boolean;
+		linkedDocument?: LinkedDocumentContext;
 	},
 ): ChatMessage[] {
 	const nextMessages = [...messages];
@@ -443,6 +508,13 @@ function withToolPolicies(
 			role: "system",
 			content: buildMarkdownFileToolPolicy(),
 		});
+
+		if (options.linkedDocument?.shouldAutoWrite) {
+			nextMessages.push({
+				role: "system",
+				content: buildLinkedDocumentToolPolicy(options.linkedDocument),
+			});
+		}
 	}
 
 	return nextMessages;
@@ -468,4 +540,75 @@ function registerReferencedFileResult(
 			content: result.content,
 		},
 	]);
+}
+
+function inferLinkedDocumentReference(
+	app: App,
+	file: TFile,
+	editor: Editor,
+	document: ReturnType<typeof parseNoteDocument>,
+	lastUserMessage: string,
+): ReturnType<typeof parseNoteDocument> {
+	if (document.overrides.document) {
+		return document;
+	}
+
+	let nextReference: string | null = null;
+	if (hasExplicitMarkdownWriteIntent(lastUserMessage)) {
+		const explicitTarget = extractExplicitMarkdownTarget(lastUserMessage);
+		if (explicitTarget) {
+			const resolved = resolveMarkdownWriteTargetPath(app, explicitTarget, file.path);
+			if (resolved.success) {
+				nextReference = formatMarkdownWikiLink(resolved.path);
+			}
+		}
+	}
+
+	if (!nextReference) {
+		nextReference = deriveLinkedDocumentReferenceFromChatPath(file.path, lastUserMessage);
+	}
+
+	if (!nextReference) {
+		return document;
+	}
+
+	const nextText = setNoteFrontmatterField(editor.getValue(), "document", nextReference);
+	editor.setValue(nextText);
+	return parseNoteDocument(nextText);
+}
+
+async function resolveLinkedDocument(
+	app: App,
+	file: TFile,
+	reference: string | undefined,
+	lastUserMessage: string,
+	previousUserMessages: string[],
+): Promise<LinkedDocumentContext | undefined> {
+	if (!reference?.trim()) {
+		return undefined;
+	}
+
+	const result = await loadLinkedDocumentContext(app, file.path, reference);
+	if (!result.success) {
+		new Notice(`Convo GPT document mode disabled: ${result.error}`);
+		return undefined;
+	}
+
+	return {
+		...result.context,
+		shouldAutoWrite:
+			detectLinkedDocumentEditIntent(lastUserMessage) ||
+			shouldContinueLinkedDocumentDrafting(
+				lastUserMessage,
+				previousUserMessages.some((message) => detectLinkedDocumentEditIntent(message)),
+			),
+	};
+}
+
+function postProcessCompletionText(text: string, linkedDocument?: LinkedDocumentContext): string {
+	if (!linkedDocument) {
+		return text;
+	}
+
+	return linkifyLinkedDocumentMentions(text, linkedDocument.path);
 }
