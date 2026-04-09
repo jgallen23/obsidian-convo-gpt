@@ -7,5 +7,4 @@ Be helpful and concise. Use proper Markdown: \`\`\`language for code blocks, \`i
 When appropriate, end with an open question to keep the conversation helpful and make contextual offers based on their last message.`;
 export const CHAT_HEADING_PREFIX = "#";
 export const DEFAULT_MODEL = "openai@gpt-5.4";
-export const LAST_SAVED_MARKDOWN_PATH_KEY = "convo_gpt_last_saved_markdown_path";
 export const DEFAULT_REFERENCED_FILE_EXTENSIONS = ["md", "txt", "csv", "json", "yaml"] as const;

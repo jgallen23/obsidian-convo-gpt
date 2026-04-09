@@ -68,5 +68,4 @@ export interface ParsedNoteDocument {
 	body: string;
 	bodyStartOffset: number;
 	overrides: NoteOverrides;
-	lastSavedMarkdownPath?: string;
 }

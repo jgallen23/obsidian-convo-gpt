@@ -110,7 +110,9 @@ Convo GPT can expose a small set of model tools during a chat turn when the curr
 ### Markdown file saves
 
 - The markdown save tool lets the model create, replace, append to, or inspect another vault markdown file.
+- The tool is only exposed when the user explicitly names the markdown target, such as `story.md`, `Stories/story.md`, or `[[Stories/story]]`.
 - Writes require explicit user approval before they are applied.
+- If the user asks to save without naming a target, the model should ask where to save instead of inferring a previous destination.
 - The tool is intended for `.md` files only.
 
 ## Settings

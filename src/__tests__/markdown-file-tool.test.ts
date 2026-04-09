@@ -12,15 +12,15 @@ describe("markdown file tool", () => {
 		expect(shouldOfferMarkdownFileTool("Tell me a story and save it to story.md", true)).toBe(true);
 	});
 
+	it("offers the tool for wiki-link write targets", () => {
+		expect(shouldOfferMarkdownFileTool("Write the summary to [[Stories/daily-summary]]", true)).toBe(true);
+	});
+
 	it("does not offer the tool for plain writing requests", () => {
 		expect(shouldOfferMarkdownFileTool("Write me a story about the moon.", true)).toBe(false);
 	});
 
-	it("offers the tool for follow-up continuation requests when a markdown target is remembered", () => {
-		expect(shouldOfferMarkdownFileTool("Add another joke.", true, "story.md")).toBe(true);
-	});
-
-	it("does not offer the tool for follow-up continuation requests without a remembered target", () => {
+	it("does not offer the tool for vague follow-up save requests without an explicit target", () => {
 		expect(shouldOfferMarkdownFileTool("Add another joke.", true)).toBe(false);
 	});
 
@@ -49,6 +49,20 @@ describe("markdown file tool", () => {
 		});
 	});
 
+	it("normalizes wiki-link markdown note targets", () => {
+		expect(resolveMarkdownVaultPath("[[Stories/story]]")).toEqual({
+			success: true,
+			path: "Stories/story.md",
+		});
+	});
+
+	it("normalizes wiki-link markdown note targets with alias and heading", () => {
+		expect(resolveMarkdownVaultPath("[[Stories/story#draft|Story Draft]]")).toEqual({
+			success: true,
+			path: "Stories/story.md",
+		});
+	});
+
 	it("rejects non-markdown paths", () => {
 		expect(resolveMarkdownVaultPath("story.txt")).toEqual({
 			success: false,
@@ -60,8 +74,8 @@ describe("markdown file tool", () => {
 		expect(buildMarkdownWritePreview("a".repeat(900))).toContain("…");
 	});
 
-	it("builds policy text that includes the remembered target", () => {
-		expect(buildMarkdownFileToolPolicy("story.md")).toContain("story.md");
-		expect(buildMarkdownFileToolPolicy("story.md")).toContain("Never claim content was saved");
+	it("builds policy text that requires explicit targets", () => {
+		expect(buildMarkdownFileToolPolicy()).toContain("Only use save_markdown_file when the user explicitly names the markdown target");
+		expect(buildMarkdownFileToolPolicy()).toContain("Never claim content was saved");
 	});
 });

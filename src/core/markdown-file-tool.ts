@@ -50,44 +50,46 @@ const markdownWriteRequestSchema = z
 		}
 	});
 
-export function shouldOfferMarkdownFileTool(message: string, enabled: boolean, rememberedPath?: string): boolean {
+const WIKI_LINK_REGEX = /\[\[[^[\]]+\]\]/;
+const MARKDOWN_LINK_REGEX = /\[[^\]]+\]\(([^)]+)\)/;
+
+export function shouldOfferMarkdownFileTool(message: string, enabled: boolean): boolean {
 	if (!enabled) {
 		return false;
 	}
 
 	const normalized = message.toLowerCase();
+	const hasWriteIntent = /\b(save|append|replace|update|edit|rewrite|create|write)\b/.test(normalized);
+	if (!hasWriteIntent) {
+		return false;
+	}
+
 	if (/\.md\b/.test(normalized)) {
 		return true;
 	}
 
-	const hasWriteIntent = /\b(save|append|replace|update|edit|rewrite|create)\b/.test(normalized);
-	const hasFileHint = /\b(file|note|markdown)\b/.test(normalized);
-	const hasContinuationIntent = /\b(add|append|continue|expand|update|revise|rewrite|change)\b/.test(normalized);
-
-	if (hasWriteIntent && hasFileHint) {
+	if (WIKI_LINK_REGEX.test(message)) {
 		return true;
 	}
 
-	return Boolean(rememberedPath && hasContinuationIntent);
+	for (const match of message.matchAll(new RegExp(MARKDOWN_LINK_REGEX, "g"))) {
+		const path = match[1]?.trim() ?? "";
+		if (path.toLowerCase().endsWith(".md")) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
-export function buildMarkdownFileToolPolicy(rememberedPath?: string): string {
-	const lines = [
+export function buildMarkdownFileToolPolicy(): string {
+	return [
 		"Markdown file save policy:",
 		"- Never claim content was saved, appended, updated, or written unless save_markdown_file returned status success in this turn.",
 		"- If no save succeeds, explicitly say the content was not saved.",
-	];
-
-	if (rememberedPath) {
-		lines.push(
-			`- This note remembers the last successful markdown save target: ${rememberedPath}.`,
-			"- For follow-up requests to add, continue, expand, revise, or update content without naming a file, default to appending to that remembered markdown file unless the user clearly asks for replace.",
-		);
-	} else {
-		lines.push("- If the user asks to save but does not provide a markdown filename, ask them where to save it instead of guessing.");
-	}
-
-	return lines.join("\n");
+		"- Only use save_markdown_file when the user explicitly names the markdown target, such as story.md, Stories/story.md, or [[Stories/story]].",
+		"- If the user asks to save but does not provide an explicit markdown path or note reference, ask them where to save it instead of guessing.",
+	].join("\n");
 }
 
 export function getMarkdownFileToolDefinition(): FunctionTool {
@@ -103,7 +105,7 @@ export function getMarkdownFileToolDefinition(): FunctionTool {
 			properties: {
 				path: {
 					type: "string",
-					description: "Vault-relative markdown path like story.md or Stories/story.md.",
+					description: "Vault-relative markdown path or note reference like story.md, Stories/story.md, or [[Stories/story]].",
 				},
 				operation: {
 					type: "string",
@@ -159,7 +161,7 @@ export function parseMarkdownWriteRequest(argumentsJson: string): { data: Markdo
 }
 
 export function resolveMarkdownVaultPath(rawPath: string): { path: string; success: true } | { error: string; success: false } {
-	const trimmed = rawPath.trim();
+	const trimmed = normalizeMarkdownPathInput(rawPath);
 	if (!trimmed) {
 		return { success: false, error: "A markdown file path is required." };
 	}
@@ -191,6 +193,29 @@ export function resolveMarkdownVaultPath(rawPath: string): { path: string; succe
 	}
 
 	return { success: true, path };
+}
+
+function normalizeMarkdownPathInput(rawPath: string): string {
+	const trimmed = rawPath.trim();
+	if (!trimmed) {
+		return "";
+	}
+
+	const wikiMatch = trimmed.match(/^\[\[([^[\]]+)\]\]$/);
+	const markdownMatch = trimmed.match(/^\[[^\]]+\]\(([^)]+)\)$/);
+	const referenceTarget = wikiMatch?.[1] ?? markdownMatch?.[1] ?? trimmed;
+	const withoutAlias = referenceTarget.split("|")[0]?.trim() ?? "";
+	const withoutFragment = withoutAlias.split("#")[0]?.trim() ?? "";
+
+	if (!withoutFragment) {
+		return "";
+	}
+
+	if (!/\.[^./\\]+$/.test(withoutFragment)) {
+		return `${withoutFragment}.md`;
+	}
+
+	return withoutFragment;
 }
 
 export function buildMarkdownWritePreview(content: string | undefined, maxChars = 800): string {

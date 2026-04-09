@@ -186,6 +186,7 @@ function buildRequestStatus() {
 	return {
 		clear: vi.fn(),
 		notifyRequestStart: vi.fn(),
+		notifyToolUse: vi.fn(),
 		setCalling: vi.fn(),
 		setWaitingForRenameApproval: vi.fn(),
 		setSaving: vi.fn(),

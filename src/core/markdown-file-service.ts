@@ -46,7 +46,7 @@ export async function executeMarkdownWriteRequest(
 	approver: MarkdownWriteApprover,
 	statusCallbacks: MarkdownWriteStatusCallbacks = {},
 ): Promise<MarkdownWriteToolResult> {
-	const resolved = resolveMarkdownVaultPath(request.path);
+	const resolved = resolveMarkdownWriteTargetPath(app, request.path);
 	if (!resolved.success) {
 		return {
 			status: "validation_error",
@@ -166,6 +166,31 @@ export async function executeMarkdownWriteRequest(
 	}
 }
 
+function resolveMarkdownWriteTargetPath(
+	app: App,
+	rawPath: string,
+): { path: string; success: true } | { error: string; success: false } {
+	const resolved = resolveMarkdownVaultPath(rawPath);
+	if (!resolved.success) {
+		return resolved;
+	}
+
+	const explicitReference = extractExplicitMarkdownReference(rawPath);
+	if (!explicitReference) {
+		return resolved;
+	}
+
+	const linkedFile = app.metadataCache.getFirstLinkpathDest?.(explicitReference, "");
+	if (linkedFile instanceof TFile && linkedFile.extension.toLowerCase() === "md") {
+		return {
+			success: true,
+			path: linkedFile.path,
+		};
+	}
+
+	return resolved;
+}
+
 export function requestMarkdownWriteApproval(app: App, request: MarkdownWriteApprovalRequest): Promise<boolean> {
 	return new Promise((resolve) => {
 		new MarkdownWriteApprovalModal(app, request, resolve).open();
@@ -244,4 +269,27 @@ class MarkdownWriteApprovalModal extends Modal {
 
 function capitalize(value: string): string {
 	return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function extractExplicitMarkdownReference(rawPath: string): string | null {
+	const trimmed = rawPath.trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	const wikiMatch = trimmed.match(/^\[\[([^[\]]+)\]\]$/);
+	if (wikiMatch) {
+		return normalizeReferenceTarget(wikiMatch[1] ?? "");
+	}
+
+	const markdownMatch = trimmed.match(/^\[[^\]]+\]\(([^)]+)\)$/);
+	if (markdownMatch) {
+		return normalizeReferenceTarget(markdownMatch[1] ?? "");
+	}
+
+	return null;
+}
+
+function normalizeReferenceTarget(rawReference: string): string {
+	return rawReference.split("|")[0]?.split("#")[0]?.trim() ?? "";
 }

@@ -3,7 +3,6 @@ import {
 	normalizeReferencedFileExtensions,
 	parseNoteDocument,
 	parseNoteOverrides,
-	persistLastSavedMarkdownPath,
 	sanitizeSettings,
 	stripFrontmatter,
 } from "../core/frontmatter";
@@ -52,13 +51,6 @@ Hello`;
 	it("preserves an explicitly blank agent folder", () => {
 		const settings = sanitizeSettings({ agentFolder: "" });
 		expect(settings.agentFolder).toBe("");
-	});
-
-	it("persists and parses the last saved markdown path", () => {
-		const updated = persistLastSavedMarkdownPath("# _You 1_\n\nHello", "Stories/story.md");
-		const parsed = parseNoteDocument(updated);
-		expect(parsed.lastSavedMarkdownPath).toBe("Stories/story.md");
-		expect(parsed.body).toContain("# _You 1_");
 	});
 
 	it("normalizes referenced file extensions", () => {

@@ -185,11 +185,12 @@ describe("runChatCommand", () => {
 			},
 		);
 		const editor = createEditor("# _You (1)_\n\nHelp me write this.");
+		const requestStatus = buildRequestStatus();
 
 		await runChatCommand({
 			app: app as never,
 			editor: editor as never,
-			requestStatus: buildRequestStatus(),
+			requestStatus,
 			settings: buildSettings(),
 			view: { file: noteFile } as never,
 		});
@@ -210,6 +211,7 @@ describe("runChatCommand", () => {
 		expect(editor.getValue()).toContain("Final answer.");
 		expect(editor.getValue()).toContain("### Referenced files");
 		expect(editor.getValue()).toContain("[[Agents/Style Guide.md]]");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Reading referenced file: Style Guide");
 	});
 
 	it("allows nested reads discovered from an earlier file read in the same turn", async () => {
@@ -333,11 +335,12 @@ describe("runChatCommand", () => {
 			},
 		);
 		const editor = createEditor("# _You (1)_\n\nRead [[Brief]] and save it to story.md.");
+		const requestStatus = buildRequestStatus();
 
 		await runChatCommand({
 			app: app as never,
 			editor: editor as never,
-			requestStatus: buildRequestStatus(),
+			requestStatus,
 			settings: buildSettings(),
 			view: { file: noteFile } as never,
 		});
@@ -355,6 +358,8 @@ describe("runChatCommand", () => {
 		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledTimes(1);
 		expect(editor.getValue()).toContain("### Referenced files");
 		expect(editor.getValue()).toContain("[[Docs/Brief.md]]");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Reading referenced file: Brief");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Saving markdown file: Stories/story.md");
 	});
 
 	it("can process fetch calls and append a fetch summary", async () => {
@@ -387,11 +392,12 @@ describe("runChatCommand", () => {
 			});
 
 		const editor = createEditor("# _You (1)_\n\nFetch https://api.example.com/users with an Authorization header.");
+		const requestStatus = buildRequestStatus();
 
 		await runChatCommand({
 			app: buildApp(noteFile, {}, {}) as never,
 			editor: editor as never,
-			requestStatus: buildRequestStatus(),
+			requestStatus,
 			settings: buildSettings(),
 			view: { file: noteFile } as never,
 		});
@@ -410,6 +416,36 @@ describe("runChatCommand", () => {
 		expect(executeFetchToolCallMock).toHaveBeenCalledTimes(1);
 		expect(editor.getValue()).toContain("### Fetch calls");
 		expect(editor.getValue()).toContain("GET [https://api.example.com/users](https://api.example.com/users) -> 200");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using fetch: GET https://api.example.com/users");
+	});
+
+	it("shows a notice when web search starts without writing inline status text", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const requestStatus = buildRequestStatus();
+
+		streamMock.mockImplementation(async (_messages, callbacks) => {
+			callbacks.onSearchStart?.();
+			callbacks.onText("Search-backed answer.");
+			return {
+				text: "Search-backed answer.",
+				sourcesAppendix: "",
+			};
+		});
+
+		const editor = createEditor("# _You (1)_\n\nWhat happened in the latest OpenAI news?");
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus,
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using web search");
+		expect(requestStatus.setWebSearch).toHaveBeenCalledTimes(1);
+		expect(editor.getValue()).toContain("Search-backed answer.");
+		expect(editor.getValue()).not.toContain("Using web search");
 	});
 
 	it("does not expose fetch for a plain url without explicit request intent", async () => {
@@ -474,6 +510,7 @@ function buildRequestStatus() {
 	return {
 		clear: vi.fn(),
 		notifyRequestStart: vi.fn(),
+		notifyToolUse: vi.fn(),
 		setCalling: vi.fn(),
 		setWaitingForRenameApproval: vi.fn(),
 		setSaving: vi.fn(),

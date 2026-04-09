@@ -5,6 +5,7 @@ export interface StatusBarLike {
 export interface RequestStatusManager {
 	clear(): void;
 	notifyRequestStart(text: string): void;
+	notifyToolUse(text: string): void;
 	setCalling(model: string): void;
 	setWaitingForRenameApproval(): void;
 	setSaving(path: string): void;
@@ -17,7 +18,7 @@ export class PluginRequestStatusManager implements RequestStatusManager {
 	constructor(
 		private readonly statusBarItem: StatusBarLike,
 		private readonly isMobile: boolean,
-		private readonly mobileNotifier: (text: string) => void,
+		private readonly noticeNotifier: (text: string) => void,
 	) {}
 
 	clear(): void {
@@ -26,8 +27,12 @@ export class PluginRequestStatusManager implements RequestStatusManager {
 
 	notifyRequestStart(text: string): void {
 		if (this.isMobile) {
-			this.mobileNotifier(`Convo GPT: ${text}`);
+			this.noticeNotifier(`Convo GPT: ${text}`);
 		}
+	}
+
+	notifyToolUse(text: string): void {
+		this.noticeNotifier(`Convo GPT: ${text}`);
 	}
 
 	setCalling(model: string): void {

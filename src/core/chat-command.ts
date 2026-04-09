@@ -1,13 +1,14 @@
-import { Notice, TFile, type App, type Editor, type EditorPosition, type MarkdownView } from "obsidian";
+import { Notice, TFile, type App, type Editor, type MarkdownView } from "obsidian";
 import { resolveAgent } from "./agent-resolver";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
-import { parseNoteDocument, persistLastSavedMarkdownPath } from "./frontmatter";
+import { parseNoteDocument } from "./frontmatter";
 import { executeFetchToolCall } from "./fetch-service";
 import {
 	buildFetchToolPolicy,
 	FETCH_TOOL_NAME,
 	formatFetchAppendix,
+	parseFetchRequest,
 	shouldOfferFetchTool,
 	type FetchSummary,
 } from "./fetch-tool";
@@ -22,12 +23,15 @@ import {
 	buildMarkdownFileToolPolicy,
 	MAX_MARKDOWN_TOOL_ROUNDS,
 	MARKDOWN_FILE_TOOL_NAME,
+	parseMarkdownWriteRequest,
 	shouldOfferMarkdownFileTool,
 } from "./markdown-file-tool";
 import {
 	buildFunctionCallOutput,
 	formatReferencedFileAppendix,
 	buildReferencedFileToolPolicy,
+	normalizeReferencedFileLookup,
+	parseReferencedFileReadRequest,
 	REFERENCED_FILE_TOOL_NAME,
 	type ReferencedFileSummary,
 	type ReferencedFileReadToolResult,
@@ -46,11 +50,6 @@ interface ChatCommandContext {
 	requestStatus: RequestStatusManager;
 	view: MarkdownView;
 	settings: PluginSettings;
-}
-
-interface OffsetRange {
-	start: EditorPosition;
-	end: EditorPosition;
 }
 
 export async function runChatCommand(context: ChatCommandContext): Promise<void> {
@@ -144,16 +143,11 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	editor.replaceRange(assistantPrefix, editor.offsetToPos(writeOffset));
 	writeOffset += assistantPrefix.length;
 
-	let noticeRange: OffsetRange | null = null;
 	let completionText = "";
 	let sourcesAppendix = "";
 	let shouldPlaceFinalCursor = true;
 	const shouldUseFetchTool = shouldOfferFetchTool(lastMessage.content, config.enableFetchTool);
-	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(
-		lastMessage.content,
-		config.enableMarkdownFileTool,
-		document.lastSavedMarkdownPath,
-	);
+	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(lastMessage.content, config.enableMarkdownFileTool);
 	const shouldUseReferencedFileTool = Boolean(
 		config.enableReferencedFileReadTool && referencedFileReadState && referencedFileReadState.allowedPaths.size > 0,
 	);
@@ -171,7 +165,6 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					includeFetchTool: shouldUseFetchTool,
 					includeMarkdownFileTool: shouldUseMarkdownFileTool,
 					includeReferencedFileTool: shouldUseReferencedFileTool,
-					rememberedPath: document.lastSavedMarkdownPath,
 				}),
 				config.model,
 				requestStatus,
@@ -186,42 +179,16 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			sourcesAppendix = completion.sourcesAppendix;
 			editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
 			writeOffset += completionText.length;
-			if (completion.lastSavedMarkdownPath) {
-				const currentValue = editor.getValue();
-				const nextValue = persistLastSavedMarkdownPath(currentValue, completion.lastSavedMarkdownPath);
-				if (nextValue !== currentValue) {
-					editor.setValue(nextValue);
-					writeOffset += nextValue.length - currentValue.length;
-				}
-			}
 		} else if (config.stream) {
 			const writer = new StreamingWriter(editor, editor.offsetToPos(writeOffset));
 			writer.start();
 			let didSetStreamingStatus = false;
 			const completion = await client.stream(messages, {
 				onSearchStart: () => {
-					writer.forceFlush();
-					if (!noticeRange) {
-						const searchNotice = "_[Using web search...]_\n\n";
-						const start = writer.getCursor();
-						editor.replaceRange(searchNotice, start);
-						const end = editor.offsetToPos(editor.posToOffset(start) + searchNotice.length);
-						writer.setCursor(end);
-						noticeRange = {
-							start,
-							end,
-						};
-					}
+					requestStatus.notifyToolUse("Using web search");
 					requestStatus.setWebSearch();
 				},
 				onText: (delta) => {
-					if (noticeRange) {
-						const pendingNoticeRange = noticeRange;
-						editor.replaceRange("", pendingNoticeRange.start, pendingNoticeRange.end);
-						writer.setCursor(pendingNoticeRange.start);
-						noticeRange = null;
-					}
-
 					if (!didSetStreamingStatus) {
 						requestStatus.setStreaming(config.model);
 						didSetStreamingStatus = true;
@@ -232,12 +199,6 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 				},
 			});
 			writer.stop();
-			if (noticeRange) {
-				const pendingNoticeRange: OffsetRange = noticeRange;
-				editor.replaceRange("", pendingNoticeRange.start, pendingNoticeRange.end);
-				writer.setCursor(pendingNoticeRange.start);
-				noticeRange = null;
-			}
 			writeOffset = editor.posToOffset(writer.getCursor());
 			shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
 
@@ -250,22 +211,11 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			writeOffset += completionText.length;
 		}
 
-		const pendingNoticeRange = noticeRange;
-		if (pendingNoticeRange) {
-			clearRange(editor, pendingNoticeRange);
-			noticeRange = null;
-		}
-
 		if (sourcesAppendix) {
 			editor.replaceRange(sourcesAppendix, editor.offsetToPos(writeOffset));
 			writeOffset += sourcesAppendix.length;
 		}
 	} catch (error) {
-		const pendingNoticeRange = noticeRange;
-		if (pendingNoticeRange) {
-			clearRange(editor, pendingNoticeRange);
-		}
-
 		const message = error instanceof Error ? error.message : String(error);
 		editor.replaceRange(`\n\n_Error: ${message}_`, editor.offsetToPos(writeOffset));
 		writeOffset += `\n\n_Error: ${message}_`.length;
@@ -338,12 +288,6 @@ async function buildMessages(
 	return messages;
 }
 
-function clearRange(editor: Editor, range: OffsetRange): number {
-	const removedLength = editor.posToOffset(range.end) - editor.posToOffset(range.start);
-	editor.replaceRange("", range.start, range.end);
-	return removedLength;
-}
-
 interface ToolConversationOptions {
 	includeFetchTool: boolean;
 	includeMarkdownFileTool: boolean;
@@ -358,7 +302,7 @@ async function runToolConversation(
 	model: string,
 	requestStatus: RequestStatusManager,
 	options: ToolConversationOptions,
-): Promise<OpenAICompletion & { lastSavedMarkdownPath?: string }> {
+): Promise<OpenAICompletion> {
 	let response = await client.createTurn({
 		messages,
 		includeFetchTool: options.includeFetchTool,
@@ -366,7 +310,6 @@ async function runToolConversation(
 		includeReferencedFileTool: options.includeReferencedFileTool,
 	});
 	const fetchCalls: FetchSummary[] = [];
-	let lastSavedMarkdownPath: string | undefined;
 	const referencedFilesRead: ReferencedFileSummary[] = [];
 
 	for (let round = 0; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
@@ -374,13 +317,13 @@ async function runToolConversation(
 			return {
 				text: response.text,
 				sourcesAppendix: `${response.sourcesAppendix}${formatReferencedFileAppendix(referencedFilesRead)}${formatFetchAppendix(fetchCalls)}`,
-				lastSavedMarkdownPath,
 			};
 		}
 
 		const toolOutputs = [];
 		for (const toolCall of response.toolCalls) {
 			if (toolCall.name === FETCH_TOOL_NAME && options.includeFetchTool) {
+				requestStatus.notifyToolUse(describeFetchToolCall(toolCall.arguments));
 				const result = await executeFetchToolCall(toolCall.arguments);
 				if (result.status === "success" && result.method && result.statusCode && (result.finalUrl || result.url)) {
 					fetchCalls.push({
@@ -395,6 +338,7 @@ async function runToolConversation(
 			}
 
 			if (toolCall.name === MARKDOWN_FILE_TOOL_NAME && options.includeMarkdownFileTool) {
+				requestStatus.notifyToolUse(describeMarkdownToolCall(toolCall.arguments));
 				const result = await executeMarkdownWriteToolCall(app, toolCall.arguments, undefined, {
 					onSaving: (path) => {
 						requestStatus.setSaving(path);
@@ -403,14 +347,12 @@ async function runToolConversation(
 						requestStatus.setWaitingForFileApproval();
 					},
 				});
-				if (result.status === "success" && result.path) {
-					lastSavedMarkdownPath = result.path;
-				}
 				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
 				continue;
 			}
 
 			if (toolCall.name === REFERENCED_FILE_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
+				requestStatus.notifyToolUse(describeReferencedFileToolCall(toolCall.arguments));
 				const result = await executeReferencedFileReadToolCall(app, toolCall.arguments, options.referencedFileReadState);
 				registerReferencedFileResult(app, options.referencedFileReadState, result);
 				if (result.status === "success" && result.path) {
@@ -444,13 +386,40 @@ async function runToolConversation(
 	throw new Error("Convo GPT exceeded the markdown file tool round limit.");
 }
 
+function describeFetchToolCall(argumentsJson: string): string {
+	const parsed = parseFetchRequest(argumentsJson);
+	if (!parsed.success) {
+		return "Using fetch";
+	}
+
+	return `Using fetch: ${parsed.data.method} ${parsed.data.url}`;
+}
+
+function describeMarkdownToolCall(argumentsJson: string): string {
+	const parsed = parseMarkdownWriteRequest(argumentsJson);
+	if (!parsed.success) {
+		return "Using markdown save tool";
+	}
+
+	return `Saving markdown file: ${parsed.data.path}`;
+}
+
+function describeReferencedFileToolCall(argumentsJson: string): string {
+	const parsed = parseReferencedFileReadRequest(argumentsJson);
+	if (!parsed.success) {
+		return "Reading referenced file";
+	}
+
+	const normalizedReference = normalizeReferencedFileLookup(parsed.data.reference);
+	return `Reading referenced file: ${normalizedReference || parsed.data.reference}`;
+}
+
 function withToolPolicies(
 	messages: ChatMessage[],
 	options: {
 		includeFetchTool: boolean;
 		includeMarkdownFileTool: boolean;
 		includeReferencedFileTool: boolean;
-		rememberedPath?: string;
 	},
 ): ChatMessage[] {
 	const nextMessages = [...messages];
@@ -472,7 +441,7 @@ function withToolPolicies(
 	if (options.includeMarkdownFileTool) {
 		nextMessages.push({
 			role: "system",
-			content: buildMarkdownFileToolPolicy(options.rememberedPath),
+			content: buildMarkdownFileToolPolicy(),
 		});
 	}
 
