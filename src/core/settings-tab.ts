@@ -99,6 +99,15 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Chats folder")
+			.setDesc("Folder used by the New Chat command. Leave blank to create chats in the vault root.")
+			.addText((text) =>
+				text.setValue(this.plugin.settings.chatsFolder).onChange(async (value) => {
+					await this.plugin.updateSettings({ chatsFolder: value.trim() });
+				}),
+			);
+
+		new Setting(containerEl)
 			.setName("Default system prompt")
 			.setDesc("Prepended ahead of agent prompts and note-specific system commands.")
 			.addTextArea((text) =>

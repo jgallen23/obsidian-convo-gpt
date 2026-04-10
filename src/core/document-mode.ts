@@ -2,7 +2,6 @@ import type { App } from "obsidian";
 import { TFile } from "obsidian";
 import { resolveMarkdownWriteTargetPath } from "./markdown-file-service";
 import { formatMarkdownWikiLink } from "./markdown-file-tool";
-import { inferDocumentBasenameFromRequest } from "./note-title";
 
 export interface LinkedDocumentContext {
 	content: string;
@@ -12,7 +11,7 @@ export interface LinkedDocumentContext {
 }
 
 const DOCUMENT_EDIT_INTENT_REGEX =
-	/\b(create|write|compose|edit|rewrite|revise|update|change|modify|rework|redraft|polish|tighten|expand|shorten|lengthen|trim|condense|simplify|clarify|fix|improve|append|add|remove|delete|insert|cut)\b/i;
+	/\b(create|write|compose|edit|rewrite|revise|update|change|modify|rework|redraft|polish|tighten|expand|shorten|lengthen|trim|condense|simplify|clarify|fix|improve|append|add|put|remove|delete|insert|cut)\b/i;
 const DOCUMENT_MAKE_INTENT_REGEX =
 	/\bmake (?:it|this|the (?:document|draft|proposal|email|article|case study))(?:\s+\w+){1,4}\b/i;
 const DOCUMENT_DRAFT_VERB_REGEX =
@@ -107,26 +106,6 @@ export async function loadLinkedDocumentContext(
 			shouldAutoWrite: false,
 		},
 	};
-}
-
-export function deriveLinkedDocumentReferenceFromChatPath(notePath: string, requestMessage: string): string | null {
-	const match = notePath.match(/^(.*\/)?(.+?) chat\.md$/i);
-	if (!match) {
-		return null;
-	}
-
-	const folder = match[1] ?? "";
-	const fallbackBasename = match[2]?.trim();
-	if (!fallbackBasename) {
-		return null;
-	}
-
-	const basename = inferDocumentBasenameFromRequest(requestMessage, fallbackBasename);
-	if (!basename) {
-		return null;
-	}
-
-	return formatMarkdownWikiLink(`${folder}${basename}.md`);
 }
 
 export function linkifyLinkedDocumentMentions(text: string, documentPath: string): string {

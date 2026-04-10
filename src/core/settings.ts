@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	defaultMaxTokens: 4096,
 	stream: true,
 	agentFolder: "",
+	chatsFolder: "chats/",
 	defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
 	enableOpenAINativeWebSearch: true,
 	enableFetchTool: true,

@@ -172,6 +172,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		defaultMaxTokens: 4096,
 		stream: true,
 		agentFolder: "",
+		chatsFolder: "chats/",
 		defaultSystemPrompt: "Be concise.",
 		enableOpenAINativeWebSearch: true,
 		enableFetchTool: true,

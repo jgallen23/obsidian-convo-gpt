@@ -3,11 +3,11 @@ import { resolveAgent } from "./agent-resolver";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
 import { parseNoteDocument } from "./frontmatter";
-import { buildRetitledBasename } from "./note-title";
 import { OpenAIClient } from "./openai-client";
 import type { RequestStatusManager } from "./request-status";
 import type { RetitleApprover } from "./retitle-note-approval";
-import type { ChatMessage, PluginSettings } from "./types";
+import { inferRetitledBasename } from "./title-inference";
+import type { PluginSettings } from "./types";
 
 interface RetitleNoteCommandContext {
 	app: App;
@@ -60,8 +60,13 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 		requestStatus.setCalling(config.model);
 
 		const client = new OpenAIClient(config);
-		const completion = await client.create(buildTitleMessages(enrichedDocument.content, agentBody, config.defaultSystemPrompt, config.system_commands));
-		const nextBasename = buildRetitledBasename(file.basename, completion.text);
+		const nextBasename = await inferRetitledBasename(client, {
+			currentBasename: file.basename,
+			noteContent: enrichedDocument.content,
+			agentBody,
+			defaultSystemPrompt: config.defaultSystemPrompt,
+			systemCommands: config.system_commands,
+		});
 		const nextPath = buildSiblingMarkdownPath(file.path, nextBasename);
 
 		if (nextPath === file.path) {
@@ -87,50 +92,6 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 	} finally {
 		requestStatus.clear();
 	}
-}
-
-function buildTitleMessages(
-	noteContent: string,
-	agentBody: string,
-	defaultSystemPrompt: string,
-	systemCommands: string[],
-): ChatMessage[] {
-	const messages: ChatMessage[] = [];
-
-	if (defaultSystemPrompt.trim()) {
-		messages.push({
-			role: "system",
-			content: defaultSystemPrompt.trim(),
-		});
-	}
-
-	if (agentBody.trim()) {
-		messages.push({
-			role: "system",
-			content: agentBody.trim(),
-		});
-	}
-
-	for (const command of systemCommands) {
-		if (command.trim()) {
-			messages.push({
-				role: "system",
-				content: command.trim(),
-			});
-		}
-	}
-
-	messages.push({
-		role: "system",
-		content:
-			"Return only a concise note title suitable for an Obsidian filename. Do not include a date prefix, file extension, quotes, markdown, labels, or explanation.",
-	});
-	messages.push({
-		role: "user",
-		content: `Infer a short, descriptive title for this note.\n\n<note>\n${noteContent.trim()}\n</note>`,
-	});
-
-	return messages;
 }
 
 function buildSiblingMarkdownPath(currentPath: string, nextBasename: string): string {

@@ -2,14 +2,10 @@ import { Notice, TFile, type App, type Editor, type MarkdownView } from "obsidia
 import { resolveAgent } from "./agent-resolver";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
-import {
-	parseNoteDocument,
-	setNoteFrontmatterField,
-} from "./frontmatter";
+import { parseNoteDocument } from "./frontmatter";
 import {
 	buildLinkedDocumentSystemPrompt,
 	buildLinkedDocumentToolPolicy,
-	deriveLinkedDocumentReferenceFromChatPath,
 	detectLinkedDocumentEditIntent,
 	linkifyLinkedDocumentMentions,
 	loadLinkedDocumentContext,
@@ -27,7 +23,6 @@ import {
 } from "./fetch-tool";
 import {
 	executeMarkdownWriteToolCall,
-	resolveMarkdownWriteTargetPath,
 } from "./markdown-file-service";
 import {
 	addReferencedFileReadSeeds,
@@ -37,9 +32,6 @@ import {
 } from "./referenced-file-service";
 import {
 	buildMarkdownFileToolPolicy,
-	extractExplicitMarkdownTarget,
-	formatMarkdownWikiLink,
-	hasExplicitMarkdownWriteIntent,
 	MAX_MARKDOWN_TOOL_ROUNDS,
 	MARKDOWN_FILE_TOOL_NAME,
 	parseMarkdownWriteRequest,
@@ -55,12 +47,14 @@ import {
 	type ReferencedFileSummary,
 	type ReferencedFileReadToolResult,
 } from "./referenced-file-tool";
+import { isGeneratedChatBasename } from "./note-title";
 import { shouldShowTopOfAnswerLink } from "./response-length";
 import { parseSections } from "./message-parser";
 import { OpenAIClient, type OpenAICompletion } from "./openai-client";
 import type { RequestStatusManager } from "./request-status";
 import { buildAssistantPrefix, buildAssistantSuffix, getNextExchangeId } from "./response-anchors";
 import { StreamingWriter } from "./streaming-writer";
+import { inferRetitledBasename } from "./title-inference";
 import type { ChatMessage, PluginSettings, ResolvedChatConfig } from "./types";
 
 interface ChatCommandContext {
@@ -86,11 +80,14 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let messages: ChatMessage[];
 	let linkedDocument: LinkedDocumentContext | undefined;
 	let referencedFileReadState: ReferencedFileReadState | undefined;
+	let agentBodyForTitle = "";
+	let agentFileForTitle: TFile | null = null;
+	let shouldAutoRetitle = false;
 
 	try {
 		exchangeId = getNextExchangeId(editor.getValue());
 		document = parseNoteDocument(editor.getValue());
-		let sections = parseSections(document.body);
+		const sections = parseSections(document.body);
 		if (sections.length === 0) {
 			new Notice("Convo GPT needs note content to send.");
 			return;
@@ -101,9 +98,11 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			new Notice("Convo GPT expects the last message in the note to be a non-empty user message.");
 			return;
 		}
+		shouldAutoRetitle =
+			isGeneratedChatBasename(file.basename) &&
+			sections.filter((section) => section.role === "user").length === 1 &&
+			sections.every((section) => section.role !== "assistant");
 
-		document = inferLinkedDocumentReference(app, file, editor, document, lastSection.content);
-		sections = parseSections(document.body);
 		linkedDocument = await resolveLinkedDocument(
 			app,
 			file,
@@ -116,6 +115,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		);
 
 		const agent = await resolveAgent(app, settings, document.overrides.agent);
+		agentFileForTitle = agent?.file ?? null;
 		config = resolveChatConfig(settings, agent?.frontmatter, document.overrides);
 		if (!config.apiKey) {
 			new Notice("Convo GPT is missing an OpenAI API key.");
@@ -154,6 +154,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			}
 			agentBody = enrichedAgent.content;
 		}
+		agentBodyForTitle = agentBody;
 
 		messages = await buildMessages(
 			app,
@@ -182,6 +183,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let completionText = "";
 	let sourcesAppendix = "";
 	let shouldPlaceFinalCursor = true;
+	let shouldAttemptAutoRetitle = false;
 	const shouldUseFetchTool = shouldOfferFetchTool(lastMessage.content, config.enableFetchTool);
 	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(
 		lastMessage.content,
@@ -264,6 +266,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			editor.replaceRange(sourcesAppendix, editor.offsetToPos(writeOffset));
 			writeOffset += sourcesAppendix.length;
 		}
+		shouldAttemptAutoRetitle = shouldAutoRetitle;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		editor.replaceRange(`\n\n_Error: ${message}_`, editor.offsetToPos(writeOffset));
@@ -277,6 +280,16 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	editor.replaceRange(assistantSuffix, editor.offsetToPos(writeOffset));
 	if (shouldPlaceFinalCursor) {
 		editor.setCursor(editor.offsetToPos(writeOffset + assistantSuffix.length));
+	}
+
+	if (shouldAttemptAutoRetitle) {
+		const client = new OpenAIClient(config);
+		await autoRetitleChatNote(app, file, editor, client, {
+			agentBody: agentBodyForTitle,
+			agentFile: agentFileForTitle,
+			defaultSystemPrompt: config.defaultSystemPrompt,
+			systemCommands: config.system_commands,
+		});
 	}
 }
 
@@ -542,41 +555,6 @@ function registerReferencedFileResult(
 	]);
 }
 
-function inferLinkedDocumentReference(
-	app: App,
-	file: TFile,
-	editor: Editor,
-	document: ReturnType<typeof parseNoteDocument>,
-	lastUserMessage: string,
-): ReturnType<typeof parseNoteDocument> {
-	if (document.overrides.document) {
-		return document;
-	}
-
-	let nextReference: string | null = null;
-	if (hasExplicitMarkdownWriteIntent(lastUserMessage)) {
-		const explicitTarget = extractExplicitMarkdownTarget(lastUserMessage);
-		if (explicitTarget) {
-			const resolved = resolveMarkdownWriteTargetPath(app, explicitTarget, file.path);
-			if (resolved.success) {
-				nextReference = formatMarkdownWikiLink(resolved.path);
-			}
-		}
-	}
-
-	if (!nextReference) {
-		nextReference = deriveLinkedDocumentReferenceFromChatPath(file.path, lastUserMessage);
-	}
-
-	if (!nextReference) {
-		return document;
-	}
-
-	const nextText = setNoteFrontmatterField(editor.getValue(), "document", nextReference);
-	editor.setValue(nextText);
-	return parseNoteDocument(nextText);
-}
-
 async function resolveLinkedDocument(
 	app: App,
 	file: TFile,
@@ -611,4 +589,61 @@ function postProcessCompletionText(text: string, linkedDocument?: LinkedDocument
 	}
 
 	return linkifyLinkedDocumentMentions(text, linkedDocument.path);
+}
+
+async function autoRetitleChatNote(
+	app: App,
+	file: TFile,
+	editor: Editor,
+	client: OpenAIClient,
+	context: {
+		agentBody: string;
+		agentFile: TFile | null;
+		defaultSystemPrompt: string;
+		systemCommands: string[];
+	},
+): Promise<void> {
+	try {
+		const document = parseNoteDocument(editor.getValue());
+		if (!document.body.trim()) {
+			return;
+		}
+
+		let agentBody = context.agentBody;
+		if (context.agentFile && agentBody.trim()) {
+			const enrichedAgent = await injectReferencedNoteContext(app, context.agentFile, agentBody);
+			if (enrichedAgent.missingReferences.length > 0) {
+				new Notice(`Convo GPT could not resolve agent references: ${enrichedAgent.missingReferences.join(", ")}`);
+			}
+			agentBody = enrichedAgent.content;
+		}
+
+		const enrichedDocument = await injectReferencedNoteContext(app, file, document.body);
+		if (enrichedDocument.missingReferences.length > 0) {
+			new Notice(`Convo GPT could not resolve: ${enrichedDocument.missingReferences.join(", ")}`);
+		}
+
+		const nextBasename = await inferRetitledBasename(client, {
+			currentBasename: file.basename,
+			noteContent: enrichedDocument.content,
+			agentBody,
+			defaultSystemPrompt: context.defaultSystemPrompt,
+			systemCommands: context.systemCommands,
+		});
+		const nextPath = buildSiblingMarkdownPath(file.path, nextBasename);
+		if (nextPath === file.path) {
+			return;
+		}
+
+		await app.fileManager.renameFile(file, nextPath);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		new Notice(`Convo GPT could not auto-retitle the chat: ${message}`);
+	}
+}
+
+function buildSiblingMarkdownPath(currentPath: string, nextBasename: string): string {
+	const slashIndex = currentPath.lastIndexOf("/");
+	const folder = slashIndex >= 0 ? currentPath.slice(0, slashIndex + 1) : "";
+	return `${folder}${nextBasename}.md`;
 }

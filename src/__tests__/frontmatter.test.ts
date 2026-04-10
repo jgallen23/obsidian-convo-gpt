@@ -44,6 +44,7 @@ Hello`;
 		expect(settings.enableReferencedFileReadTool).toBe(true);
 		expect(settings.referencedFileExtensions).toEqual(["md", "txt", "csv", "json", "yaml"]);
 		expect(settings.agentFolder).toBe("");
+		expect(settings.chatsFolder).toBe("chats/");
 		expect(settings.defaultSystemPrompt).toBe(DEFAULT_SYSTEM_PROMPT);
 	});
 
@@ -68,17 +69,12 @@ Hello`;
 		);
 	});
 
-	it("derives a sibling document reference from a chat note path", async () => {
+	it("builds linked document prompt and policy text", async () => {
 		const {
 			buildLinkedDocumentSystemPrompt,
 			buildLinkedDocumentToolPolicy,
-			deriveLinkedDocumentReferenceFromChatPath,
 			linkifyLinkedDocumentMentions,
 		} = await import("../core/document-mode");
-		expect(deriveLinkedDocumentReferenceFromChatPath("document test/doc chat.md", "help me create a story in a document")).toBe(
-			"[[document test/Story]]",
-		);
-		expect(deriveLinkedDocumentReferenceFromChatPath("Notes/Idea.md", "help me create a story in a document")).toBeNull();
 		expect(linkifyLinkedDocumentMentions("Done — wrote it to `document test/doc.md`.", "document test/doc.md")).toBe(
 			"Done — wrote it to [[document test/doc]].",
 		);

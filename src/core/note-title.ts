@@ -1,10 +1,7 @@
 const DATE_PREFIX_REGEX = /^(\d{4}-\d{2}-\d{2}\s*-\s*)/;
+const GENERATED_CHAT_BASENAME_REGEX = /^(\d{4}-\d{2}-\d{2})-(\d+)$/;
 const FORBIDDEN_FILENAME_CHARS_REGEX = /[\\/:*?"<>|]/g;
 const TRAILING_NOISE_REGEX = /[.!?,;:]+$/;
-const DOCUMENT_LOCATION_NOISE_REGEX = /\b(?:in|into)\s+(?:a|an|the|my|this)\s+document\b/gi;
-const REQUEST_PREFIX_REGEX =
-	/^(?:help me|can you|could you|would you|please|i want (?:you )?to|i need (?:you )?to|let'?s)\s+/i;
-const REQUEST_ACTION_REGEX = /^(?:create|write|draft|compose|make|start|begin|generate|put|save|add)\s+/i;
 
 export function buildRetitledBasename(currentBasename: string, rawTitle: string): string {
 	const preservedPrefix = extractDatePrefix(currentBasename);
@@ -38,34 +35,32 @@ export function normalizeGeneratedTitle(rawTitle: string): string {
 }
 
 export function extractDatePrefix(title: string): string {
+	const generatedChatMatch = title.match(GENERATED_CHAT_BASENAME_REGEX);
+	if (generatedChatMatch) {
+		return `${generatedChatMatch[1]} - `;
+	}
+
 	return title.match(DATE_PREFIX_REGEX)?.[1] ?? "";
 }
 
-export function inferDocumentBasenameFromRequest(message: string, fallbackBasename: string): string {
-	let title = message.trim();
-	title = title.replace(/\[\[[^[\]]+\]\]/g, " ");
-	title = title.replace(/\[[^\]]+\]\(([^)]+)\)/g, " ");
-	title = title.replace(REQUEST_PREFIX_REGEX, "");
-	title = title.replace(REQUEST_ACTION_REGEX, "");
-	title = title.replace(DOCUMENT_LOCATION_NOISE_REGEX, " ");
-	title = title.replace(/\bfor me\b/gi, " ");
-	title = title.replace(/\s+/g, " ").trim();
+export function formatChatDate(date: Date): string {
+	return date.toISOString().slice(0, 10);
+}
 
-	if (/^(?:a|an|the)\s+/i.test(title)) {
-		title = title.replace(/^(?:a|an|the)\s+/i, "");
-	}
+export function buildGeneratedChatBasename(dateText: string, sequence: number): string {
+	return `${dateText}-${sequence}`;
+}
 
-	title = title.replace(/^\W+|\W+$/g, "").trim();
-	if (title) {
-		title = title.charAt(0).toUpperCase() + title.slice(1);
-	}
+export function buildGeneratedChatPath(folder: string, basename: string): string {
+	return folder ? `${folder}/${basename}.md` : `${basename}.md`;
+}
 
-	const normalized = normalizeGeneratedTitle(title);
-	if (!normalized || /^(?:doc|document|draft)$/i.test(normalized)) {
-		return normalizeGeneratedTitle(fallbackBasename);
-	}
+export function isGeneratedChatBasename(basename: string): boolean {
+	return GENERATED_CHAT_BASENAME_REGEX.test(basename);
+}
 
-	return normalized;
+export function normalizeChatsFolder(folder: string): string {
+	return folder.trim().replace(/^\/+|\/+$/g, "");
 }
 
 function hasWrappingQuotes(value: string): boolean {

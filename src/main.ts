@@ -1,6 +1,7 @@
 import { Buffer } from "buffer";
 import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import { runChatCommand } from "./core/chat-command";
+import { runNewChatCommand } from "./core/new-chat-command";
 import { runRetitleNoteCommand } from "./core/retitle-note-command";
 import { sanitizeSettings } from "./core/frontmatter";
 import { requestRetitleApproval } from "./core/retitle-note-approval";
@@ -46,6 +47,15 @@ export default class ConvoGptPlugin extends Plugin {
 					settings: this.settings,
 					requestStatus: this.requestStatusManager,
 				});
+			},
+		});
+
+		this.addCommand({
+			id: "new-chat",
+			name: "New Chat",
+			icon: "plus-square",
+			callback: () => {
+				void runNewChatCommand(this.app, this.settings);
 			},
 		});
 

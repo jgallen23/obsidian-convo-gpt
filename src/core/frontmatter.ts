@@ -52,6 +52,7 @@ const settingsSchema = z.object({
 	defaultMaxTokens: z.number().int().positive().default(4096),
 	stream: z.boolean().default(true),
 	agentFolder: z.string().default(""),
+	chatsFolder: z.string().default("chats/"),
 	defaultSystemPrompt: z.string().default(DEFAULT_SYSTEM_PROMPT),
 	enableOpenAINativeWebSearch: z.boolean().default(true),
 	enableFetchTool: z.boolean().default(true),

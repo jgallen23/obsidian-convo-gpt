@@ -33,6 +33,7 @@ export interface PluginSettings {
 	defaultMaxTokens: number;
 	stream: boolean;
 	agentFolder: string;
+	chatsFolder: string;
 	defaultSystemPrompt: string;
 	enableOpenAINativeWebSearch: boolean;
 	enableFetchTool: boolean;

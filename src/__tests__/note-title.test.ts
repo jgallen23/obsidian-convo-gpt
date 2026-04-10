@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildRetitledBasename, inferDocumentBasenameFromRequest, normalizeGeneratedTitle } from "../core/note-title";
+import {
+	buildGeneratedChatBasename,
+	buildGeneratedChatPath,
+	buildRetitledBasename,
+	isGeneratedChatBasename,
+	normalizeChatsFolder,
+	normalizeGeneratedTitle,
+} from "../core/note-title";
 
 describe("note title helpers", () => {
 	it("preserves a leading date prefix when retitling", () => {
@@ -28,13 +35,19 @@ describe("note title helpers", () => {
 		);
 	});
 
-	it("infers a document basename from a user request", () => {
-		expect(inferDocumentBasenameFromRequest("help me create a story in a document", "doc")).toBe("Story");
-		expect(
-			inferDocumentBasenameFromRequest(
-				"help me write an email in a document that asks a new lead to book a call with me",
-				"doc",
-			),
-		).toBe("Email that asks a new lead to book a call with me");
+	it("retitles generated chat basenames into dated titles", () => {
+		expect(buildRetitledBasename("2026-04-02-3", "Project kickoff notes")).toBe("2026-04-02 - Project kickoff notes");
+	});
+
+	it("builds generated chat paths and detects generated chat names", () => {
+		expect(buildGeneratedChatBasename("2026-04-02", 3)).toBe("2026-04-02-3");
+		expect(buildGeneratedChatPath("chats", "2026-04-02-3")).toBe("chats/2026-04-02-3.md");
+		expect(isGeneratedChatBasename("2026-04-02-3")).toBe(true);
+		expect(isGeneratedChatBasename("2026-04-02 - Project kickoff notes")).toBe(false);
+	});
+
+	it("normalizes chats folder paths", () => {
+		expect(normalizeChatsFolder("/chats/nested/")).toBe("chats/nested");
+		expect(normalizeChatsFolder("")).toBe("");
 	});
 });

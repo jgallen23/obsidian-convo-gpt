@@ -469,7 +469,7 @@ Summarize the current draft.`);
 		expect(editor.getValue()).toContain("Summary only.");
 	});
 
-	it("infers and persists the linked document from the first explicit save target", async () => {
+	it("does not enable document mode without an explicit document property", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 		createTurnMock
 			.mockResolvedValueOnce({
@@ -508,62 +508,12 @@ Summarize the current draft.`);
 			view: { file: noteFile } as never,
 		});
 
-		expect(editor.getValue()).toContain("document:");
-		expect(editor.getValue()).toContain("[[Stories/story]]");
-		expect(editor.getValue()).toContain("Created the story.");
-	});
-
-	it("infers the linked document from a sibling chat-note name", async () => {
-		const noteFile = createFile("document test/doc chat.md");
-		createTurnMock
-			.mockResolvedValueOnce({
-				responseId: "resp_1",
-				text: "",
-				sourcesAppendix: "",
-				toolCalls: [
-					{
-						type: "function_call",
-						call_id: "call_write",
-						name: "save_markdown_file",
-						arguments: JSON.stringify({
-							path: "document test/Story.md",
-							operation: "create",
-							content: "# Story\n\nOnce upon a time.",
-							instructions: null,
-							reason: "Create the requested story document.",
-						}),
-					},
-				],
-			})
-			.mockResolvedValueOnce({
-				responseId: "resp_2",
-				text: "Created the story document.",
-				sourcesAppendix: "",
-				toolCalls: [],
-			});
-
-		const editor = createEditor("help me create a story in a document");
-
-		await runChatCommand({
-			app: buildApp(noteFile, {}, {}) as never,
-			editor: editor as never,
-			requestStatus: buildRequestStatus(),
-			settings: buildSettings(),
-			view: { file: noteFile } as never,
-		});
-
 		const firstTurn = createTurnMock.mock.calls[0]?.[0];
-		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("document test/Story.md"))).toBe(true);
-		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledWith(
-			expect.anything(),
-			expect.any(String),
-			undefined,
-			expect.objectContaining({
-				trustedPaths: new Set(["document test/Story.md"]),
-			}),
+		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("Linked document mode is active"))).toBe(
+			false,
 		);
-		expect(editor.getValue()).toContain("[[document test/Story]]");
-		expect(editor.getValue()).toContain("Created the story document.");
+		expect(editor.getValue()).not.toContain("document:");
+		expect(editor.getValue()).toContain("Created the story.");
 	});
 
 	it("continues document drafting across short follow-up replies", async () => {
@@ -627,6 +577,78 @@ Give me the tone and style.
 			}),
 		);
 		expect(editor.getValue()).toContain("Wrote the story into the document.");
+	});
+
+	it("treats 'put ... at the bottom' as a document edit request", async () => {
+		const noteFile = createFile("document test - existing doc/chat.md");
+		const storyFile = createFile("document test - existing doc/short story 1.md");
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_write",
+						name: "save_markdown_file",
+						arguments: JSON.stringify({
+							path: "document test - existing doc/short story 1.md",
+							operation: "replace",
+							content: "# Short Story\n\n...\n\n## Review\n\nStrong opening hook.",
+							instructions: null,
+							reason: "Append a review to the story.",
+						}),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Added a review section to the bottom of `document test - existing doc/short story 1.md`.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const editor = createEditor(`---
+document: "[[short story 1]]"
+---
+what do you think of the story
+
+<hr class="__convo_gpt__">
+
+# _AI (1)_
+It works well.
+
+<hr class="__convo_gpt__">
+# _You (2)_
+
+put a review of the story at the bottom of it`);
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"short story 1|document test - existing doc/chat.md": storyFile,
+				},
+				{
+					"document test - existing doc/short story 1.md": "# Short Story\n\nOriginal story.",
+				},
+			) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.any(String),
+			undefined,
+			expect.objectContaining({
+				trustedPaths: new Set(["document test - existing doc/short story 1.md"]),
+			}),
+		);
+		expect(editor.getValue()).toContain("Added a review section to the bottom of [[document test - existing doc/short story 1]].");
 	});
 
 	it("can process fetch calls and append a fetch summary", async () => {
@@ -735,6 +757,73 @@ Give me the tone and style.
 		expect(createTurnMock).not.toHaveBeenCalled();
 		expect(createMock).toHaveBeenCalledTimes(1);
 	});
+
+	it("auto-retitles a generated chat after the first successful reply", async () => {
+		const noteFile = createFile("chats/2026-04-10-1.md");
+		const renameFile = vi.fn().mockResolvedValue(undefined);
+		createMock
+			.mockResolvedValueOnce({
+				text: "Here is a kickoff outline.",
+				sourcesAppendix: "",
+			})
+			.mockResolvedValueOnce({
+				text: "Project kickoff outline",
+				sourcesAppendix: "",
+			});
+
+		await runChatCommand({
+			app: {
+				...buildApp(noteFile, {}, {}),
+				fileManager: { renameFile },
+			} as never,
+			editor: createEditor("# _You (1)_\n\nPlan a project kickoff outline.") as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(createMock).toHaveBeenCalledTimes(2);
+		expect(renameFile).toHaveBeenCalledWith(
+			expect.objectContaining({ path: "chats/2026-04-10-1.md" }),
+			"chats/2026-04-10 - Project kickoff outline.md",
+		);
+	});
+
+	it("does not auto-retitle generated chats after the first exchange", async () => {
+		const noteFile = createFile("chats/2026-04-10-1.md");
+		const renameFile = vi.fn().mockResolvedValue(undefined);
+		createMock.mockResolvedValue({
+			text: "Second-turn answer.",
+			sourcesAppendix: "",
+		});
+
+		await runChatCommand({
+			app: {
+				...buildApp(noteFile, {}, {}),
+				fileManager: { renameFile },
+			} as never,
+			editor: createEditor(`# _You (1)_
+
+Plan a project kickoff outline.
+
+<hr class="__convo_gpt__">
+
+# _AI (1)_
+Here is a kickoff outline.
+
+<hr class="__convo_gpt__">
+
+# _You (2)_
+
+Make it shorter.`) as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(createMock).toHaveBeenCalledTimes(1);
+		expect(renameFile).not.toHaveBeenCalled();
+	});
 });
 
 function buildApp(noteFile: TFile, linkMap: Record<string, TFile>, fileContents: Record<string, string>) {
@@ -763,6 +852,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		defaultMaxTokens: 4096,
 		stream: true,
 		agentFolder: "Agents",
+		chatsFolder: "chats/",
 		defaultSystemPrompt: "Be concise.",
 		enableOpenAINativeWebSearch: true,
 		enableFetchTool: true,

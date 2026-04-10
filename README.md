@@ -4,6 +4,7 @@ OpenAI-first markdown-native conversations inside Obsidian notes.
 
 ## Features
 
+- New Chat command that creates dated chat notes in a configurable chats folder
 - Section-based chat format inside a markdown note
 - OpenAI-only requests with per-note frontmatter overrides
 - Agent prompts loaded from a configurable agent folder
@@ -28,6 +29,23 @@ npm run install:vault -- /path/to/your/vault
 ```
 
 The install script always runs the production build first, then copies `dist/main.js`, `dist/manifest.json`, and `dist/styles.css` into `.obsidian/plugins/convo-gpt/` inside the given vault.
+
+## New Chat
+
+Use the `New Chat` command to create a new chat note with empty `agent` and `document` frontmatter:
+
+```md
+---
+agent:
+document:
+---
+```
+
+How it works:
+
+- The note is created in `Chats folder`, which defaults to `chats/`.
+- New chat filenames start as `YYYY-MM-DD-X.md`, where `X` is the first unused daily sequence number in that folder.
+- After the first successful assistant reply, Convo GPT infers a title and renames the note automatically while keeping the date prefix.
 
 ## Agents
 
@@ -84,19 +102,13 @@ Chat notes can be bound to one markdown document that acts as the live drafting 
 How document mode activates:
 
 - Set `document: [[Drafts/Proposal]]` in the chat note frontmatter to bind the note to a document explicitly.
-- If `document` is not set yet, the plugin will infer and persist it from the first explicit markdown save target the user names, such as `Stories/story.md` or `[[Stories/story]]`.
-- If the chat note itself is named like `Something chat.md`, the plugin can infer a sibling linked document on first use even without an explicit target.
-
-How the linked document is named:
-
-- When inferring a linked document from a chat note, the plugin tries to name the document from the user's first request instead of defaulting to `doc.md`.
-- Example: `help me create a story in a document` can infer `[[Story]]`.
-- Example: `help me write an email in a document that asks a new lead to book a call with me` can infer a document name based on that request instead of `doc`.
-- If the request does not produce a usable title, the chat-note basename is used as a fallback.
+- If `document` is absent, the note is not in document mode.
+- The plugin does not auto-add `document:` and does not infer document mode from message wording or chat-note filenames.
 
 How document mode behaves:
 
 - On every chat turn, Convo GPT reads the latest contents of the linked document and includes them in the request context.
+- This means you can create a new AI chat, set `document:` up front, and the assistant will understand the linked document even before you ask for changes.
 - If the latest user message is asking for document changes, Convo GPT updates that bound file directly without asking for approval again.
 - Short follow-up replies in an ongoing drafting flow, such as `#3`, `funny and short`, or similar selection-style replies, continue document drafting instead of falling back to plain chat.
 - Clearly read-only requests such as summaries, discussion, or review should not write to the document.
@@ -161,7 +173,7 @@ Convo GPT can expose a small set of model tools during a chat turn when the curr
 
 - The markdown save tool lets the model create, replace, append to, or inspect another vault markdown file.
 - The tool is only exposed when the user explicitly names the markdown target, such as `story.md`, `Stories/story.md`, or `[[Stories/story]]`.
-- Linked document mode is the exception: if the chat note is already bound to a `document`, edit requests can save to that bound file without the user restating the path.
+- Linked document mode is the exception: if the chat note already has `document: ...`, edit requests can save to that bound file without the user restating the path.
 - Writes require explicit user approval before they are applied.
 - If the user asks to save without naming a target, the model should ask where to save instead of inferring a previous destination.
 - The tool is intended for `.md` files only.
@@ -171,6 +183,7 @@ Convo GPT can expose a small set of model tools during a chat turn when the curr
 Notable plugin settings:
 
 - `Agent folder`: folder used to resolve markdown-based agents by basename.
+- `Chats folder`: folder used by the `New Chat` command. Blank means the vault root.
 - `Enable OpenAI native web search`: enables provider-native `web_search` when the selected model supports it.
 - `Enable fetch tool`: allows the model to make outbound HTTP or HTTPS requests for explicit URLs.
 - `Enable markdown file save tool`: allows the model to request markdown file writes with approval.
