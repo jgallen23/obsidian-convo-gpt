@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { TFolder } from "obsidian";
-import { buildNewChatNoteTemplate, ensureChatsFolder, getNextChatNotePath, runNewChatCommand } from "../core/new-chat-command";
+import {
+	buildNewChatNoteTemplate,
+	ensureChatsFolder,
+	getNextChatNotePath,
+	runNewChatCommand,
+	runNewChatRightCommand,
+} from "../core/new-chat-command";
 
 describe("new chat command", () => {
 	it("builds the expected starting note template", () => {
@@ -23,7 +29,17 @@ describe("new chat command", () => {
 		expect(app.vault.createFolder).toHaveBeenCalledWith("chats");
 		expect(app.vault.create).toHaveBeenCalledWith("chats/2026-04-10-1.md", "---\nagent:\ndocument:\n---\n");
 		expect(app.workspace.getLeaf).toHaveBeenCalledWith(true);
-		expect(app.openFile).toHaveBeenCalledWith(expect.objectContaining({ path: "chats/2026-04-10-1.md" }));
+		expect(app.openNewTabFile).toHaveBeenCalledWith(expect.objectContaining({ path: "chats/2026-04-10-1.md" }));
+	});
+
+	it("creates the note and opens it in a right split", async () => {
+		const app = buildApp();
+
+		await runNewChatRightCommand(app as never, { chatsFolder: "chats/" } as never, new Date("2026-04-10T12:00:00.000Z"));
+
+		expect(app.vault.create).toHaveBeenCalledWith("chats/2026-04-10-1.md", "---\nagent:\ndocument:\n---\n");
+		expect(app.workspace.getLeaf).toHaveBeenCalledWith("split", "vertical");
+		expect(app.openRightSplitFile).toHaveBeenCalledWith(expect.objectContaining({ path: "chats/2026-04-10-1.md" }));
 	});
 
 	it("rejects folder creation when a file blocks the path", async () => {
@@ -39,7 +55,8 @@ describe("new chat command", () => {
 
 function buildApp(initialEntries: Record<string, unknown> = {}) {
 	const entries = new Map(Object.entries(initialEntries));
-	const openFile = vi.fn().mockResolvedValue(undefined);
+	const openNewTabFile = vi.fn().mockResolvedValue(undefined);
+	const openRightSplitFile = vi.fn().mockResolvedValue(undefined);
 	const createFolder = vi.fn(async (path: string) => {
 		const folder = createFolderEntry(path);
 		entries.set(path, folder);
@@ -53,16 +70,25 @@ function buildApp(initialEntries: Record<string, unknown> = {}) {
 	});
 
 	return {
-		openFile,
+		openNewTabFile,
+		openRightSplitFile,
 		vault: {
 			getAbstractFileByPath: (path: string) => entries.get(path) ?? null,
 			create,
 			createFolder,
 		},
 		workspace: {
-			getLeaf: vi.fn(() => ({
-				openFile,
-			})),
+			getLeaf: vi.fn((mode?: boolean | "split", direction?: "vertical" | "horizontal") => {
+				if (mode === "split" && direction === "vertical") {
+					return {
+						openFile: openRightSplitFile,
+					};
+				}
+
+				return {
+					openFile: openNewTabFile,
+				};
+			}),
 		},
 	};
 }

@@ -32,7 +32,8 @@ The install script always runs the production build first, then copies `dist/mai
 
 ## New Chat
 
-Use the `New Chat` command to create a new chat note with empty `agent` and `document` frontmatter:
+Use the `New Chat` command to create a new chat note with empty `agent` and `document` frontmatter.
+Use `New Chat (to the right)` to create the same note in a right-side split:
 
 ```md
 ---

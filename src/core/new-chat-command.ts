@@ -3,15 +3,29 @@ import { buildGeneratedChatBasename, buildGeneratedChatPath, formatChatDate, nor
 import type { PluginSettings } from "./types";
 
 const NEW_CHAT_NOTE_TEMPLATE = "---\nagent:\ndocument:\n---\n";
+type NewChatOpenMode = "new-tab" | "right-split";
 
 export async function runNewChatCommand(app: App, settings: PluginSettings, now = new Date()): Promise<void> {
+	return runNewChatCommandWithMode(app, settings, "new-tab", now);
+}
+
+export async function runNewChatRightCommand(app: App, settings: PluginSettings, now = new Date()): Promise<void> {
+	return runNewChatCommandWithMode(app, settings, "right-split", now);
+}
+
+async function runNewChatCommandWithMode(
+	app: App,
+	settings: PluginSettings,
+	openMode: NewChatOpenMode,
+	now = new Date(),
+): Promise<void> {
 	try {
 		const folder = normalizeChatsFolder(settings.chatsFolder);
 		await ensureChatsFolder(app, folder);
 
 		const path = getNextChatNotePath(app, folder, formatChatDate(now));
 		const file = await app.vault.create(path, NEW_CHAT_NOTE_TEMPLATE);
-		await app.workspace.getLeaf(true).openFile(file);
+		await openNewChatFile(app, file, openMode);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		new Notice(`Convo GPT could not create a new chat: ${message}`);
@@ -53,4 +67,13 @@ export async function ensureChatsFolder(app: App, folder: string): Promise<void>
 
 export function buildNewChatNoteTemplate(): string {
 	return NEW_CHAT_NOTE_TEMPLATE;
+}
+
+async function openNewChatFile(app: App, file: Awaited<ReturnType<App["vault"]["create"]>>, openMode: NewChatOpenMode): Promise<void> {
+	if (openMode === "right-split") {
+		await app.workspace.getLeaf("split", "vertical").openFile(file);
+		return;
+	}
+
+	await app.workspace.getLeaf(true).openFile(file);
 }
