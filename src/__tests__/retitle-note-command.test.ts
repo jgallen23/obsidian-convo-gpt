@@ -178,6 +178,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		enableFetchTool: true,
 		enableMarkdownFileTool: true,
 		enableReferencedFileReadTool: true,
+		enableDebugLogging: false,
 		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],
 		...overrides,
 	};

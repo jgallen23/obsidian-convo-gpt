@@ -39,6 +39,7 @@ export interface PluginSettings {
 	enableFetchTool: boolean;
 	enableMarkdownFileTool: boolean;
 	enableReferencedFileReadTool: boolean;
+	enableDebugLogging: boolean;
 	referencedFileExtensions: string[];
 }
 

@@ -1,7 +1,8 @@
 import { Buffer } from "buffer";
 import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import { runChatCommand } from "./core/chat-command";
-import { runNewChatCommand, runNewChatRightCommand } from "./core/new-chat-command";
+import { setConvoDebugLoggingEnabled } from "./core/debug-log";
+import { runChatWithDocumentCommand, runNewChatCommand, runNewChatRightCommand } from "./core/new-chat-command";
 import { runRetitleNoteCommand } from "./core/retitle-note-command";
 import { sanitizeSettings } from "./core/frontmatter";
 import { requestRetitleApproval } from "./core/retitle-note-approval";
@@ -27,6 +28,7 @@ export default class ConvoGptPlugin extends Plugin {
 			},
 		);
 		this.settings = await loadPluginSettings(this);
+		setConvoDebugLoggingEnabled(this.settings.enableDebugLogging);
 		this.requestStatusManager.clear();
 		this.addSettingTab(new ConvoGptSettingTab(this.app, this));
 
@@ -69,6 +71,20 @@ export default class ConvoGptPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "chat-with-this-document",
+			name: "Chat with this Document",
+			icon: "message-circle-plus",
+			editorCallback: (_editor, view) => {
+				if (!(view instanceof MarkdownView)) {
+					new Notice("Convo GPT can only run in markdown views.");
+					return;
+				}
+
+				void runChatWithDocumentCommand(this.app, this.settings, view.file);
+			},
+		});
+
+		this.addCommand({
 			id: "summarize-and-retitle-note",
 			name: "Summarize And Retitle Note",
 			icon: "whole-word",
@@ -102,6 +118,7 @@ export default class ConvoGptPlugin extends Plugin {
 			...this.settings,
 			...nextSettings,
 		});
+		setConvoDebugLoggingEnabled(this.settings.enableDebugLogging);
 		await savePluginSettings(this, this.settings);
 	}
 }

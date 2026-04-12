@@ -7,6 +7,7 @@ import type {
 	ResponseFunctionToolCall,
 	ResponseInputItem,
 	ResponseCreateParamsStreaming,
+	ToolChoiceFunction,
 } from "openai/resources/responses/responses";
 import {
 	extractResponseSources,
@@ -24,6 +25,7 @@ import {
 	getReferencedFileToolDefinition,
 } from "./referenced-file-tool";
 import { createOpenAIFetchAdapter } from "./openai-fetch";
+import { logConvoDebug } from "./debug-log";
 import type { ChatMessage, ResolvedChatConfig } from "./types";
 
 const OPENAI_REQUEST_METADATA = {
@@ -49,6 +51,7 @@ export interface CreateTurnParams {
 	inputItems?: ResponseInputItem[];
 	messages?: ChatMessage[];
 	previousResponseId?: string;
+	toolChoice?: ResponseCreateParamsNonStreaming["tool_choice"];
 }
 
 export interface StreamCallbacks {
@@ -96,12 +99,27 @@ export class OpenAIClient {
 	}
 
 	async createTurn(params: CreateTurnParams): Promise<OpenAITurn> {
-		const response = await this.client.responses.create(this.buildTurnRequest(params));
+		const request = this.buildTurnRequest(params);
+		logConvoDebug("openai.createTurn.request", {
+			model: request.model,
+			toolChoice: params.toolChoice ?? null,
+			toolNames: request.tools?.map((tool) => ("name" in tool ? tool.name : tool.type)) ?? [],
+			messageCount: params.messages?.length ?? null,
+			inputItemCount: params.inputItems?.length ?? 0,
+			hasPreviousResponseId: Boolean(params.previousResponseId),
+		});
+		const response = await this.client.responses.create(request);
+		const toolCalls = extractFunctionToolCalls(response);
+		logConvoDebug("openai.createTurn.response", {
+			responseId: response.id,
+			toolCallNames: toolCalls.map((toolCall) => toolCall.name),
+			textLength: extractText(response).length,
+		});
 		return {
 			responseId: response.id,
 			text: extractText(response),
 			sourcesAppendix: formatWebSearchSources(extractResponseSources(response)),
-			toolCalls: extractFunctionToolCalls(response),
+			toolCalls,
 		};
 	}
 
@@ -176,6 +194,7 @@ export class OpenAIClient {
 				temperature: this.config.temperature,
 				max_output_tokens: this.config.max_tokens,
 				tools: tools.length > 0 ? tools : undefined,
+				tool_choice: params.toolChoice,
 				parallel_tool_calls: false,
 				stream: false,
 			};
@@ -189,6 +208,7 @@ export class OpenAIClient {
 			temperature: this.config.temperature,
 			max_output_tokens: this.config.max_tokens,
 			tools: tools.length > 0 ? tools : undefined,
+			tool_choice: params.toolChoice,
 			parallel_tool_calls: false,
 			stream: false,
 		};
@@ -225,6 +245,13 @@ export function normalizeModelId(model: string): string {
 
 export function getOpenAIRequestMetadata(): Record<string, string> {
 	return { ...OPENAI_REQUEST_METADATA };
+}
+
+export function createForcedFunctionToolChoice(name: string): ToolChoiceFunction {
+	return {
+		type: "function",
+		name,
+	};
 }
 
 function extractText(response: unknown): string {

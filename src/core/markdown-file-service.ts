@@ -1,4 +1,5 @@
 import { Modal, Setting, TFile, TFolder, type App } from "obsidian";
+import { logConvoDebug } from "./debug-log";
 import {
 	buildMarkdownWritePreview,
 	parseMarkdownWriteRequest,
@@ -52,8 +53,18 @@ export async function executeMarkdownWriteRequest(
 	options: MarkdownWriteExecutionOptions = {},
 ): Promise<MarkdownWriteToolResult> {
 	const statusCallbacks = options.statusCallbacks ?? {};
+	logConvoDebug("markdownWrite.execute.start", {
+		requestedPath: request.path,
+		operation: request.operation,
+		trustedPathCount: options.trustedPaths?.size ?? 0,
+	});
 	const resolved = resolveMarkdownWriteTargetPath(app, request.path);
 	if (!resolved.success) {
+		logConvoDebug("markdownWrite.execute.resolveFailed", {
+			requestedPath: request.path,
+			operation: request.operation,
+			error: resolved.error,
+		});
 		return {
 			status: "validation_error",
 			message: resolved.error,
@@ -62,6 +73,13 @@ export async function executeMarkdownWriteRequest(
 	}
 
 	const existing = app.vault.getAbstractFileByPath(resolved.path);
+	logConvoDebug("markdownWrite.execute.resolved", {
+		requestedPath: request.path,
+		resolvedPath: resolved.path,
+		operation: request.operation,
+		exists: existing instanceof TFile,
+		trusted: options.trustedPaths?.has(resolved.path) ?? false,
+	});
 	if (existing && !(existing instanceof TFile)) {
 		return {
 			status: "validation_error",
@@ -100,6 +118,11 @@ export async function executeMarkdownWriteRequest(
 				reason: request.reason?.trim() || "Model requested a markdown file change.",
 				preview: buildMarkdownWritePreview(request.content),
 			});
+	logConvoDebug("markdownWrite.execute.approval", {
+		resolvedPath: resolved.path,
+		operation: request.operation,
+		approved: approval,
+	});
 
 	if (!approval) {
 		return {
@@ -123,6 +146,10 @@ export async function executeMarkdownWriteRequest(
 			}
 			await ensureParentFolders(app, resolved.path);
 			await app.vault.create(resolved.path, request.content ?? "");
+			logConvoDebug("markdownWrite.execute.success", {
+				resolvedPath: resolved.path,
+				operation: request.operation,
+			});
 			return {
 				status: "success",
 				message: `Created markdown file ${resolved.path}.`,
@@ -140,6 +167,10 @@ export async function executeMarkdownWriteRequest(
 				};
 			}
 			await app.vault.modify(existing, request.content ?? "");
+			logConvoDebug("markdownWrite.execute.success", {
+				resolvedPath: resolved.path,
+				operation: request.operation,
+			});
 			return {
 				status: "success",
 				message: `Replaced markdown file ${resolved.path}.`,
@@ -157,6 +188,10 @@ export async function executeMarkdownWriteRequest(
 				};
 			}
 			await app.vault.process(existing, (content) => `${content}${request.content ?? ""}`);
+			logConvoDebug("markdownWrite.execute.success", {
+				resolvedPath: resolved.path,
+				operation: request.operation,
+			});
 			return {
 				status: "success",
 				message: `Appended markdown content to ${resolved.path}.`,

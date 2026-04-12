@@ -35,6 +35,15 @@ Hello`;
 		expect(parseNoteOverrides({ system_commands: "Test" }).system_commands).toEqual(["Test"]);
 	});
 
+	it("preserves document when sibling frontmatter fields are blank", () => {
+		expect(
+			parseNoteOverrides({
+				agent: null,
+				document: "[[list of jokes.md]]",
+			}).document,
+		).toBe("[[list of jokes.md]]");
+	});
+
 	it("sanitizes settings with defaults", () => {
 		const settings = sanitizeSettings({});
 		expect(settings.defaultModel).toBe("openai@gpt-5.4");
@@ -42,6 +51,7 @@ Hello`;
 		expect(settings.enableFetchTool).toBe(true);
 		expect(settings.enableMarkdownFileTool).toBe(true);
 		expect(settings.enableReferencedFileReadTool).toBe(true);
+		expect(settings.enableDebugLogging).toBe(false);
 		expect(settings.referencedFileExtensions).toEqual(["md", "txt", "csv", "json", "yaml"]);
 		expect(settings.agentFolder).toBe("");
 		expect(settings.chatsFolder).toBe("chats/");

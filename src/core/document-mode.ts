@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { TFile } from "obsidian";
+import { logConvoDebug } from "./debug-log";
 import { resolveMarkdownWriteTargetPath } from "./markdown-file-service";
 import { formatMarkdownWikiLink } from "./markdown-file-tool";
 
@@ -84,23 +85,45 @@ export async function loadLinkedDocumentContext(
 	notePath: string,
 	reference: string,
 ): Promise<{ context: LinkedDocumentContext; success: true } | { error: string; success: false }> {
+	logConvoDebug("documentMode.load.start", {
+		notePath,
+		reference,
+	});
 	const resolved = resolveMarkdownWriteTargetPath(app, reference, notePath);
 	if (!resolved.success) {
+		logConvoDebug("documentMode.load.resolveFailed", {
+			notePath,
+			reference,
+			error: resolved.error,
+		});
 		return resolved;
 	}
 
 	const existing = app.vault.getAbstractFileByPath(resolved.path);
 	if (existing && !(existing instanceof TFile)) {
+		logConvoDebug("documentMode.load.invalidTarget", {
+			notePath,
+			reference,
+			resolvedPath: resolved.path,
+		});
 		return {
 			success: false,
 			error: `Linked document path is not a markdown file: ${resolved.path}`,
 		};
 	}
 
+	const content = existing instanceof TFile ? await app.vault.read(existing) : "";
+	logConvoDebug("documentMode.load.success", {
+		notePath,
+		reference,
+		resolvedPath: resolved.path,
+		exists: existing instanceof TFile,
+		contentLength: content.length,
+	});
 	return {
 		success: true,
 		context: {
-			content: existing instanceof TFile ? await app.vault.read(existing) : "",
+			content,
 			exists: existing instanceof TFile,
 			path: resolved.path,
 			shouldAutoWrite: false,

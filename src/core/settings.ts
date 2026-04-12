@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	enableFetchTool: true,
 	enableMarkdownFileTool: true,
 	enableReferencedFileReadTool: true,
+	enableDebugLogging: false,
 	referencedFileExtensions: [...DEFAULT_REFERENCED_FILE_EXTENSIONS],
 };
 

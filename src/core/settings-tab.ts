@@ -153,6 +153,15 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Enable debug logging")
+			.setDesc("Writes Convo GPT diagnostic messages to the developer console. Leave off unless you are debugging plugin behavior.")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableDebugLogging).onChange(async (value) => {
+					await this.plugin.updateSettings({ enableDebugLogging: value });
+				}),
+			);
+
+		new Setting(containerEl)
 			.setName("Referenced file extensions")
 			.setDesc("Comma-separated list of file extensions the read tool may open, for example md, txt, csv, json, yaml.")
 			.addText((text) =>

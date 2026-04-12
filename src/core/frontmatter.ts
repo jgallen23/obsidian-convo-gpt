@@ -30,16 +30,29 @@ const extensionListSchema = z.preprocess((value) => {
 	return value;
 }, z.array(z.string()).default([...DEFAULT_REFERENCED_FILE_EXTENSIONS]));
 
+const optionalTrimmedStringSchema = z.preprocess((value) => {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		return trimmed.length > 0 ? trimmed : undefined;
+	}
+
+	if (value === null || value === undefined) {
+		return undefined;
+	}
+
+	return value;
+}, z.string().min(1).optional());
+
 const noteOverridesSchema = z
 	.object({
-		model: z.string().min(1).optional(),
+		model: optionalTrimmedStringSchema,
 		temperature: z.number().finite().optional(),
 		max_tokens: z.number().int().positive().optional(),
 		stream: booleanSchema.optional(),
-		agent: z.string().min(1).optional(),
-		document: z.string().min(1).optional(),
+		agent: optionalTrimmedStringSchema,
+		document: optionalTrimmedStringSchema,
 		system_commands: stringArraySchema.optional(),
-		baseUrl: z.string().url().optional(),
+		baseUrl: optionalTrimmedStringSchema.pipe(z.string().url().optional()),
 		openai_native_web_search: booleanSchema.optional(),
 	})
 	.passthrough();
@@ -58,6 +71,7 @@ const settingsSchema = z.object({
 	enableFetchTool: z.boolean().default(true),
 	enableMarkdownFileTool: z.boolean().default(true),
 	enableReferencedFileReadTool: z.boolean().default(true),
+	enableDebugLogging: z.boolean().default(false),
 	referencedFileExtensions: extensionListSchema,
 });
 

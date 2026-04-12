@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { TFolder } from "obsidian";
+import { TFile, TFolder } from "obsidian";
 import {
 	buildNewChatNoteTemplate,
 	ensureChatsFolder,
+	formatDeterministicDocumentReference,
 	getNextChatNotePath,
+	runChatWithDocumentCommand,
 	runNewChatCommand,
 	runNewChatRightCommand,
 } from "../core/new-chat-command";
@@ -11,6 +13,15 @@ import {
 describe("new chat command", () => {
 	it("builds the expected starting note template", () => {
 		expect(buildNewChatNoteTemplate()).toBe("---\nagent:\ndocument:\n---\n");
+	});
+
+	it("builds a starting note template bound to a linked document", () => {
+		expect(buildNewChatNoteTemplate("[[Docs/Proposal.md]]")).toContain('document: "[[Docs/Proposal.md]]"');
+	});
+
+	it("formats deterministic document references from vault-relative paths", () => {
+		expect(formatDeterministicDocumentReference("Docs/Proposal.md")).toBe("[[Docs/Proposal.md]]");
+		expect(formatDeterministicDocumentReference("story.md")).toBe("[[story.md]]");
 	});
 
 	it("finds the next daily sequence path", () => {
@@ -40,6 +51,50 @@ describe("new chat command", () => {
 		expect(app.vault.create).toHaveBeenCalledWith("chats/2026-04-10-1.md", "---\nagent:\ndocument:\n---\n");
 		expect(app.workspace.getLeaf).toHaveBeenCalledWith("split", "vertical");
 		expect(app.openRightSplitFile).toHaveBeenCalledWith(expect.objectContaining({ path: "chats/2026-04-10-1.md" }));
+	});
+
+	it("creates a right-split chat bound to the active document", async () => {
+		const app = buildApp();
+		const sourceFile = createMarkdownFile("Docs/Proposal.md");
+
+		await runChatWithDocumentCommand(
+			app as never,
+			{ chatsFolder: "chats/" } as never,
+			sourceFile,
+			new Date("2026-04-10T12:00:00.000Z"),
+		);
+
+		expect(app.vault.create).toHaveBeenCalledWith(
+			"chats/2026-04-10-1.md",
+			expect.stringContaining('document: "[[Docs/Proposal.md]]"'),
+		);
+		expect(app.workspace.getLeaf).toHaveBeenCalledWith("split", "vertical");
+		expect(app.openRightSplitFile).toHaveBeenCalledWith(expect.objectContaining({ path: "chats/2026-04-10-1.md" }));
+	});
+
+	it("uses an exact wiki-link path for root-level documents", async () => {
+		const app = buildApp();
+		const sourceFile = createMarkdownFile("story.md");
+
+		await runChatWithDocumentCommand(
+			app as never,
+			{ chatsFolder: "chats/" } as never,
+			sourceFile,
+			new Date("2026-04-10T12:00:00.000Z"),
+		);
+
+		expect(app.vault.create).toHaveBeenCalledWith(
+			"chats/2026-04-10-1.md",
+			expect.stringContaining('document: "[[story.md]]"'),
+		);
+	});
+
+	it("does not create a chat when no active document is available", async () => {
+		const app = buildApp();
+
+		await runChatWithDocumentCommand(app as never, { chatsFolder: "chats/" } as never, null, new Date("2026-04-10T12:00:00.000Z"));
+
+		expect(app.vault.create).not.toHaveBeenCalled();
 	});
 
 	it("rejects folder creation when a file blocks the path", async () => {
@@ -99,6 +154,17 @@ function createFile(path: string) {
 		basename: path.split("/").at(-1)?.replace(/\.md$/, "") ?? path,
 		extension: "md",
 	};
+}
+
+function createMarkdownFile(path: string): TFile {
+	const file = Object.create(TFile.prototype) as TFile;
+	Object.assign(file, {
+		path,
+		name: path.split("/").at(-1) ?? path,
+		basename: path.split("/").at(-1)?.replace(/\.md$/, "") ?? path,
+		extension: "md",
+	});
+	return file;
 }
 
 function createFolderEntry(path: string): TFolder {

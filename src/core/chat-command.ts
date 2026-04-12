@@ -13,6 +13,7 @@ import {
 	type LinkedDocumentContext,
 } from "./document-mode";
 import { executeFetchToolCall } from "./fetch-service";
+import { logConvoDebug } from "./debug-log";
 import {
 	buildFetchToolPolicy,
 	FETCH_TOOL_NAME,
@@ -50,7 +51,7 @@ import {
 import { isGeneratedChatBasename } from "./note-title";
 import { shouldShowTopOfAnswerLink } from "./response-length";
 import { parseSections } from "./message-parser";
-import { OpenAIClient, type OpenAICompletion } from "./openai-client";
+import { createForcedFunctionToolChoice, OpenAIClient, type OpenAICompletion } from "./openai-client";
 import type { RequestStatusManager } from "./request-status";
 import { buildAssistantPrefix, buildAssistantSuffix, getNextExchangeId } from "./response-anchors";
 import { StreamingWriter } from "./streaming-writer";
@@ -85,8 +86,9 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let shouldAutoRetitle = false;
 
 	try {
-		exchangeId = getNextExchangeId(editor.getValue());
-		document = parseNoteDocument(editor.getValue());
+		const editorText = editor.getValue();
+		exchangeId = getNextExchangeId(editorText);
+		document = await loadNoteDocumentForChat(app, file, editorText);
 		const sections = parseSections(document.body);
 		if (sections.length === 0) {
 			new Notice("Convo GPT needs note content to send.");
@@ -193,6 +195,14 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	const shouldUseReferencedFileTool = Boolean(
 		config.enableReferencedFileReadTool && referencedFileReadState && referencedFileReadState.allowedPaths.size > 0,
 	);
+	logConvoDebug("chat.run.flags", {
+		notePath: file.path,
+		linkedDocumentPath: linkedDocument?.path ?? null,
+		linkedDocumentAutoWrite: linkedDocument?.shouldAutoWrite ?? false,
+		shouldUseFetchTool,
+		shouldUseMarkdownFileTool,
+		shouldUseReferencedFileTool,
+	});
 
 	try {
 		const client = new OpenAIClient(config);
@@ -217,6 +227,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					includeReferencedFileTool: shouldUseReferencedFileTool,
 					linkedDocument,
 					referencedFileReadState,
+					requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
 				},
 			);
 			completionText = completion.text;
@@ -293,6 +304,65 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	}
 }
 
+async function loadNoteDocumentForChat(app: App, file: TFile, editorText: string): Promise<ReturnType<typeof parseNoteDocument>> {
+	const editorDocument = parseNoteDocument(editorText);
+	const storedText = await readStoredNoteText(app, file);
+	if (storedText === null) {
+		logConvoDebug("chat.noteDocument.editorOnly", {
+			notePath: file.path,
+			editorHasDocument: Boolean(editorDocument.overrides.document),
+			editorHasAgent: Boolean(editorDocument.overrides.agent),
+		});
+		return editorDocument;
+	}
+
+	const storedDocument = parseNoteDocument(storedText);
+	logConvoDebug("chat.noteDocument.compare", {
+		notePath: file.path,
+		editorHasDocument: Boolean(editorDocument.overrides.document),
+		storedHasDocument: Boolean(storedDocument.overrides.document),
+		editorHasAgent: Boolean(editorDocument.overrides.agent),
+		storedHasAgent: Boolean(storedDocument.overrides.agent),
+		editorStartsWithFrontmatter: editorText.startsWith("---\n") || editorText.startsWith("---\r\n"),
+		storedStartsWithFrontmatter: storedText.startsWith("---\n") || storedText.startsWith("---\r\n"),
+	});
+
+	return {
+		...editorDocument,
+		overrides: mergeNoteOverrides(storedDocument.overrides, editorDocument.overrides),
+	};
+}
+
+async function readStoredNoteText(app: App, file: TFile): Promise<string | null> {
+	try {
+		if ("cachedRead" in app.vault && typeof app.vault.cachedRead === "function") {
+			return await app.vault.cachedRead(file);
+		}
+
+		return await app.vault.read(file);
+	} catch (error) {
+		logConvoDebug("chat.noteDocument.readStoredFailed", {
+			notePath: file.path,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return null;
+	}
+}
+
+function mergeNoteOverrides(
+	storedOverrides: ReturnType<typeof parseNoteDocument>["overrides"],
+	editorOverrides: ReturnType<typeof parseNoteDocument>["overrides"],
+): ReturnType<typeof parseNoteDocument>["overrides"] {
+	return {
+		...storedOverrides,
+		...editorOverrides,
+		system_commands:
+			editorOverrides.system_commands && editorOverrides.system_commands.length > 0
+				? editorOverrides.system_commands
+				: storedOverrides.system_commands ?? [],
+	};
+}
+
 async function buildMessages(
 	app: App,
 	file: MarkdownView["file"],
@@ -364,6 +434,7 @@ interface ToolConversationOptions {
 	includeReferencedFileTool: boolean;
 	linkedDocument?: LinkedDocumentContext;
 	referencedFileReadState?: ReferencedFileReadState;
+	requireLinkedDocumentSave?: boolean;
 }
 
 async function runToolConversation(
@@ -374,17 +445,41 @@ async function runToolConversation(
 	requestStatus: RequestStatusManager,
 	options: ToolConversationOptions,
 ): Promise<OpenAICompletion> {
+	logConvoDebug("chat.toolConversation.start", {
+		includeFetchTool: options.includeFetchTool,
+		includeMarkdownFileTool: options.includeMarkdownFileTool,
+		includeReferencedFileTool: options.includeReferencedFileTool,
+		requireLinkedDocumentSave: options.requireLinkedDocumentSave ?? false,
+		linkedDocumentPath: options.linkedDocument?.path ?? null,
+	});
 	let response = await client.createTurn({
 		messages,
 		includeFetchTool: options.includeFetchTool,
 		includeMarkdownFileTool: options.includeMarkdownFileTool,
 		includeReferencedFileTool: options.includeReferencedFileTool,
+		toolChoice: options.requireLinkedDocumentSave ? "required" : undefined,
 	});
 	const fetchCalls: FetchSummary[] = [];
 	const referencedFilesRead: ReferencedFileSummary[] = [];
+	let didSaveLinkedDocument = false;
 
 	for (let round = 0; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
+		logConvoDebug("chat.toolConversation.round", {
+			round: round + 1,
+			responseId: response.responseId,
+			toolCallNames: response.toolCalls.map((toolCall) => toolCall.name),
+			didSaveLinkedDocument,
+		});
+
 		if (response.toolCalls.length === 0) {
+			if (options.requireLinkedDocumentSave && !didSaveLinkedDocument) {
+				logConvoDebug("chat.toolConversation.missingLinkedDocumentSave", {
+					responseId: response.responseId,
+					textLength: response.text.length,
+				});
+				throw new Error("Convo GPT expected to save the linked document, but the model did not call save_markdown_file.");
+			}
+
 			return {
 				text: response.text,
 				sourcesAppendix: `${response.sourcesAppendix}${formatReferencedFileAppendix(referencedFilesRead)}${formatFetchAppendix(fetchCalls)}`,
@@ -396,6 +491,12 @@ async function runToolConversation(
 			if (toolCall.name === FETCH_TOOL_NAME && options.includeFetchTool) {
 				requestStatus.notifyToolUse(describeFetchToolCall(toolCall.arguments));
 				const result = await executeFetchToolCall(toolCall.arguments);
+				logConvoDebug("chat.toolConversation.fetchResult", {
+					status: result.status,
+					url: "url" in result ? result.url ?? null : null,
+					finalUrl: "finalUrl" in result ? result.finalUrl ?? null : null,
+					statusCode: "statusCode" in result ? result.statusCode ?? null : null,
+				});
 				if (result.status === "success" && result.method && result.statusCode && (result.finalUrl || result.url)) {
 					fetchCalls.push({
 						method: result.method,
@@ -424,6 +525,15 @@ async function runToolConversation(
 							? new Set([options.linkedDocument.path])
 							: undefined,
 				});
+				logConvoDebug("chat.toolConversation.markdownWriteResult", {
+					status: result.status,
+					path: "path" in result ? result.path ?? null : null,
+					operation: "operation" in result ? result.operation ?? null : null,
+					message: "message" in result ? result.message : null,
+				});
+				if (result.status === "success" && options.requireLinkedDocumentSave) {
+					didSaveLinkedDocument = true;
+				}
 				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
 				continue;
 			}
@@ -431,6 +541,11 @@ async function runToolConversation(
 			if (toolCall.name === REFERENCED_FILE_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
 				requestStatus.notifyToolUse(describeReferencedFileToolCall(toolCall.arguments));
 				const result = await executeReferencedFileReadToolCall(app, toolCall.arguments, options.referencedFileReadState);
+				logConvoDebug("chat.toolConversation.referencedFileResult", {
+					status: result.status,
+					path: "path" in result ? result.path ?? null : null,
+					truncated: "truncated" in result ? Boolean(result.truncated) : false,
+				});
 				registerReferencedFileResult(app, options.referencedFileReadState, result);
 				if (result.status === "success" && result.path) {
 					referencedFilesRead.push({
@@ -451,15 +566,29 @@ async function runToolConversation(
 		}
 
 		requestStatus.setCalling(model);
+		const nextToolChoice =
+			options.requireLinkedDocumentSave && !didSaveLinkedDocument
+				? createForcedFunctionToolChoice(MARKDOWN_FILE_TOOL_NAME)
+				: undefined;
+		logConvoDebug("chat.toolConversation.nextTurn", {
+			previousResponseId: response.responseId,
+			toolOutputCount: toolOutputs.length,
+			nextToolChoice: nextToolChoice ?? null,
+		});
 		response = await client.createTurn({
 			includeFetchTool: options.includeFetchTool,
 			includeMarkdownFileTool: options.includeMarkdownFileTool,
 			includeReferencedFileTool: options.includeReferencedFileTool,
 			inputItems: toolOutputs,
 			previousResponseId: response.responseId,
+			toolChoice: nextToolChoice,
 		});
 	}
 
+	logConvoDebug("chat.toolConversation.roundLimitExceeded", {
+		linkedDocumentPath: options.linkedDocument?.path ?? null,
+		requireLinkedDocumentSave: options.requireLinkedDocumentSave ?? false,
+	});
 	throw new Error("Convo GPT exceeded the markdown file tool round limit.");
 }
 
@@ -563,23 +692,44 @@ async function resolveLinkedDocument(
 	previousUserMessages: string[],
 ): Promise<LinkedDocumentContext | undefined> {
 	if (!reference?.trim()) {
+		logConvoDebug("chat.resolveLinkedDocument.skipped", {
+			notePath: file.path,
+			reason: "missing_reference",
+		});
 		return undefined;
 	}
 
+	logConvoDebug("chat.resolveLinkedDocument.start", {
+		notePath: file.path,
+		reference,
+	});
 	const result = await loadLinkedDocumentContext(app, file.path, reference);
 	if (!result.success) {
+		logConvoDebug("chat.resolveLinkedDocument.failed", {
+			notePath: file.path,
+			reference,
+			error: result.error,
+		});
 		new Notice(`Convo GPT document mode disabled: ${result.error}`);
 		return undefined;
 	}
 
+	const shouldAutoWrite =
+		detectLinkedDocumentEditIntent(lastUserMessage) ||
+		shouldContinueLinkedDocumentDrafting(
+			lastUserMessage,
+			previousUserMessages.some((message) => detectLinkedDocumentEditIntent(message)),
+		);
+	logConvoDebug("chat.resolveLinkedDocument.success", {
+		notePath: file.path,
+		reference,
+		resolvedPath: result.context.path,
+		exists: result.context.exists,
+		shouldAutoWrite,
+	});
 	return {
 		...result.context,
-		shouldAutoWrite:
-			detectLinkedDocumentEditIntent(lastUserMessage) ||
-			shouldContinueLinkedDocumentDrafting(
-				lastUserMessage,
-				previousUserMessages.some((message) => detectLinkedDocumentEditIntent(message)),
-			),
+		shouldAutoWrite,
 	};
 }
 
@@ -635,9 +785,17 @@ async function autoRetitleChatNote(
 			return;
 		}
 
+		logConvoDebug("chat.autoRetitle.rename", {
+			currentPath: file.path,
+			nextPath,
+		});
 		await app.fileManager.renameFile(file, nextPath);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		logConvoDebug("chat.autoRetitle.failed", {
+			notePath: file.path,
+			error: message,
+		});
 		new Notice(`Convo GPT could not auto-retitle the chat: ${message}`);
 	}
 }

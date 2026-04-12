@@ -98,6 +98,10 @@ vi.mock("../core/fetch-service", async () => {
 });
 
 vi.mock("../core/openai-client", () => ({
+	createForcedFunctionToolChoice: (name: string) => ({
+		type: "function",
+		name,
+	}),
 	OpenAIClient: class {
 		async createTurn(...args: unknown[]) {
 			return createTurnMock(args[0]);
@@ -419,6 +423,7 @@ Make it shorter.`);
 		const firstTurn = createTurnMock.mock.calls[0]?.[0];
 		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("Linked document mode is active"))).toBe(true);
 		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("Longer draft."))).toBe(true);
+		expect(firstTurn.toolChoice).toBe("required");
 		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledWith(
 			expect.anything(),
 			expect.any(String),
@@ -651,6 +656,159 @@ put a review of the story at the bottom of it`);
 		expect(editor.getValue()).toContain("Added a review section to the bottom of [[document test - existing doc/short story 1]].");
 	});
 
+	it("forces save_markdown_file after other tool calls when linked document auto-write is active", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const proposalFile = createFile("Docs/Proposal.md");
+		const briefFile = createFile("Docs/Brief.md");
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_read",
+						name: "read_referenced_file",
+						arguments: JSON.stringify({ reference: "Brief" }),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_write",
+						name: "save_markdown_file",
+						arguments: JSON.stringify({
+							path: "Docs/Proposal.md",
+							operation: "replace",
+							content: "# Proposal\n\nUpdated using the brief.",
+							instructions: null,
+							reason: "Apply the requested update.",
+						}),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_3",
+				text: "Updated the proposal in `Docs/Proposal.md`.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const editor = createEditor(`---
+document: "[[Docs/Proposal]]"
+---
+# _You (1)_
+
+Update the proposal using [[Brief]].`);
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"Docs/Proposal|Notes/Chat.md": proposalFile,
+					"Brief|Notes/Chat.md": briefFile,
+				},
+				{
+					"Docs/Proposal.md": "# Proposal\n\nOriginal draft.",
+					"Docs/Brief.md": "Keep it short and concrete.",
+				},
+			) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(createTurnMock.mock.calls[0]?.[0].toolChoice).toBe("required");
+		expect(createTurnMock.mock.calls[1]?.[0].toolChoice).toEqual({
+			type: "function",
+			name: "save_markdown_file",
+		});
+		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.any(String),
+			undefined,
+			expect.objectContaining({
+				trustedPaths: new Set(["Docs/Proposal.md"]),
+			}),
+		);
+		expect(editor.getValue()).toContain("Updated the proposal in [[Docs/Proposal]].");
+	});
+
+	it("falls back to stored frontmatter when the editor buffer omits document properties", async () => {
+		const noteFile = createFile("chats/2026-04-10-3.md");
+		const linkedFile = createFile("list of jokes.md");
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_write",
+						name: "save_markdown_file",
+						arguments: JSON.stringify({
+							path: "list of jokes.md",
+							operation: "append",
+							content: "\n- Another joke",
+							reason: "Append requested jokes.",
+						}),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Added four jokes to [[list of jokes]].",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"list of jokes.md|chats/2026-04-10-3.md": linkedFile,
+				},
+				{
+					"chats/2026-04-10-3.md": [
+						"---",
+						"agent:",
+						'document: "[[list of jokes.md]]"',
+						"---",
+						"can you add unique 4 jokes to the bottom of the file?",
+					].join("\n"),
+					"list of jokes.md": "- Existing joke",
+				},
+			) as never,
+			editor: createEditor("can you add unique 4 jokes to the bottom of the file?") as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		const firstTurn = createTurnMock.mock.calls[0]?.[0];
+		expect(firstTurn.includeMarkdownFileTool).toBe(true);
+		expect(firstTurn.toolChoice).toBe("required");
+		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("list of jokes.md"))).toBe(true);
+		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.any(String),
+			undefined,
+			expect.objectContaining({
+				trustedPaths: new Set(["list of jokes.md"]),
+			}),
+		);
+	});
+
 	it("can process fetch calls and append a fetch summary", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 
@@ -824,6 +982,7 @@ Make it shorter.`) as never,
 		expect(createMock).toHaveBeenCalledTimes(1);
 		expect(renameFile).not.toHaveBeenCalled();
 	});
+
 });
 
 function buildApp(noteFile: TFile, linkMap: Record<string, TFile>, fileContents: Record<string, string>) {
@@ -838,6 +997,7 @@ function buildApp(noteFile: TFile, linkMap: Record<string, TFile>, fileContents:
 				}
 				return Object.values(linkMap).find((file) => file.path === path) ?? null;
 			},
+			cachedRead: async (file: TFile) => fileContents[file.path] ?? "",
 			read: async (file: TFile) => fileContents[file.path] ?? "",
 		},
 	};
@@ -858,6 +1018,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		enableFetchTool: true,
 		enableMarkdownFileTool: true,
 		enableReferencedFileReadTool: true,
+		enableDebugLogging: false,
 		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],
 		...overrides,
 	};

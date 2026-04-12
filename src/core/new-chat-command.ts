@@ -1,4 +1,4 @@
-import { Notice, TFolder, type App } from "obsidian";
+import { Notice, TFolder, type App, type TFile } from "obsidian";
 import { buildGeneratedChatBasename, buildGeneratedChatPath, formatChatDate, normalizeChatsFolder } from "./note-title";
 import type { PluginSettings } from "./types";
 
@@ -13,18 +13,33 @@ export async function runNewChatRightCommand(app: App, settings: PluginSettings,
 	return runNewChatCommandWithMode(app, settings, "right-split", now);
 }
 
+export async function runChatWithDocumentCommand(
+	app: App,
+	settings: PluginSettings,
+	sourceFile: TFile | null,
+	now = new Date(),
+): Promise<void> {
+	if (!sourceFile) {
+		new Notice("Convo GPT requires an open note.");
+		return;
+	}
+
+	return runNewChatCommandWithMode(app, settings, "right-split", now, formatDeterministicDocumentReference(sourceFile.path));
+}
+
 async function runNewChatCommandWithMode(
 	app: App,
 	settings: PluginSettings,
 	openMode: NewChatOpenMode,
 	now = new Date(),
+	documentReference?: string,
 ): Promise<void> {
 	try {
 		const folder = normalizeChatsFolder(settings.chatsFolder);
 		await ensureChatsFolder(app, folder);
 
 		const path = getNextChatNotePath(app, folder, formatChatDate(now));
-		const file = await app.vault.create(path, NEW_CHAT_NOTE_TEMPLATE);
+		const file = await app.vault.create(path, buildNewChatNoteTemplate(documentReference));
 		await openNewChatFile(app, file, openMode);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -65,8 +80,16 @@ export async function ensureChatsFolder(app: App, folder: string): Promise<void>
 	}
 }
 
-export function buildNewChatNoteTemplate(): string {
-	return NEW_CHAT_NOTE_TEMPLATE;
+export function buildNewChatNoteTemplate(documentReference?: string): string {
+	if (!documentReference) {
+		return NEW_CHAT_NOTE_TEMPLATE;
+	}
+
+	return `---\nagent:\ndocument: ${JSON.stringify(documentReference)}\n---\n`;
+}
+
+export function formatDeterministicDocumentReference(path: string): string {
+	return `[[${path.replace(/\\/g, "/")}]]`;
 }
 
 async function openNewChatFile(app: App, file: Awaited<ReturnType<App["vault"]["create"]>>, openMode: NewChatOpenMode): Promise<void> {
