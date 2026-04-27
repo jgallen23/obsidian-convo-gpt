@@ -194,8 +194,10 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let completionText = "";
 	let sourcesAppendix = "";
 	let mcpUsageAppendix = "";
+	let maxOutputTokensAppendix = "";
 	let shouldPlaceFinalCursor = true;
 	let shouldAttemptAutoRetitle = false;
+	let hitMaxOutputTokens = false;
 	const mcpNoticesUsed: string[] = [];
 	const recordMcpNotice = (text: string): void => {
 		requestStatus.notifyToolUse(text);
@@ -250,6 +252,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			if (toolResult.kind === "completion") {
 				completionText = toolResult.completion.text;
 				sourcesAppendix = toolResult.completion.sourcesAppendix;
+				hitMaxOutputTokens = toolResult.completion.hitMaxOutputTokens;
 				completionText = postProcessCompletionText(completionText, linkedDocument);
 				editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
 				writeOffset += completionText.length;
@@ -310,6 +313,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 						}
 						completionText = nextCompletionText;
 						sourcesAppendix = `${streamedResponse.sourcesAppendix}${formatToolConversationAppendix(continuation.state)}`;
+						hitMaxOutputTokens = hitMaxOutputTokens || streamedResponse.hitMaxOutputTokens;
 						break;
 					}
 
@@ -339,6 +343,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					if (resumedToolResult.kind === "completion") {
 						completionText = postProcessCompletionText(resumedToolResult.completion.text, linkedDocument);
 						sourcesAppendix = resumedToolResult.completion.sourcesAppendix;
+						hitMaxOutputTokens = hitMaxOutputTokens || resumedToolResult.completion.hitMaxOutputTokens;
 						editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
 						writeOffset += completionText.length;
 						break;
@@ -375,6 +380,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			for (const notice of completion.mcpNotices ?? []) {
 				recordMcpNotice(notice);
 			}
+			hitMaxOutputTokens = completion.hitMaxOutputTokens;
 			const nextCompletionText = postProcessCompletionText(completionText, linkedDocument);
 			if (nextCompletionText !== completionText) {
 				editor.replaceRange(nextCompletionText, editor.offsetToPos(completionStartOffset), editor.offsetToPos(writeOffset));
@@ -388,6 +394,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			for (const notice of completion.mcpNotices ?? []) {
 				recordMcpNotice(notice);
 			}
+			hitMaxOutputTokens = completion.hitMaxOutputTokens;
 			completionText = postProcessCompletionText(completion.text, linkedDocument);
 			sourcesAppendix = completion.sourcesAppendix;
 			editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
@@ -395,6 +402,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		}
 
 		mcpUsageAppendix = formatMcpUsageAppendix(mcpNoticesUsed);
+		maxOutputTokensAppendix = formatMaxOutputTokensAppendix(hitMaxOutputTokens, config.max_tokens);
 		if (sourcesAppendix) {
 			editor.replaceRange(sourcesAppendix, editor.offsetToPos(writeOffset));
 			writeOffset += sourcesAppendix.length;
@@ -402,6 +410,10 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		if (mcpUsageAppendix) {
 			editor.replaceRange(mcpUsageAppendix, editor.offsetToPos(writeOffset));
 			writeOffset += mcpUsageAppendix.length;
+		}
+		if (maxOutputTokensAppendix) {
+			editor.replaceRange(maxOutputTokensAppendix, editor.offsetToPos(writeOffset));
+			writeOffset += maxOutputTokensAppendix.length;
 		}
 		shouldAttemptAutoRetitle = shouldAutoRetitle;
 	} catch (error) {
@@ -568,6 +580,7 @@ interface ToolConversationOptions {
 interface ToolConversationState {
 	didSaveLinkedDocument: boolean;
 	fetchCalls: FetchSummary[];
+	hitMaxOutputTokens: boolean;
 	referencedFilesRead: ReferencedFileSummary[];
 }
 
@@ -621,6 +634,7 @@ async function runToolConversation(
 		{
 			didSaveLinkedDocument: false,
 			fetchCalls: [],
+			hitMaxOutputTokens: false,
 			referencedFilesRead: [],
 		},
 		0,
@@ -638,6 +652,7 @@ async function resumeToolConversation(
 	startingRound: number,
 ): Promise<ToolConversationResult> {
 	for (let round = startingRound; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
+		state.hitMaxOutputTokens = state.hitMaxOutputTokens || response.hitMaxOutputTokens;
 		for (const notice of response.mcpNotices ?? []) {
 			options.onMcpNotice?.(notice);
 		}
@@ -662,6 +677,7 @@ async function resumeToolConversation(
 				completion: {
 					text: response.text,
 					sourcesAppendix: `${response.sourcesAppendix}${formatToolConversationAppendix(state)}`,
+					hitMaxOutputTokens: state.hitMaxOutputTokens,
 					mcpNotices: [],
 				},
 			};
@@ -830,6 +846,14 @@ function formatMcpUsageAppendix(notices: string[]): string {
 	}
 
 	return `\n\n### MCP usage\n${lines.join("\n")}`;
+}
+
+function formatMaxOutputTokensAppendix(hitMaxOutputTokens: boolean, maxOutputTokens: number): string {
+	if (!hitMaxOutputTokens) {
+		return "";
+	}
+
+	return `\n\n_Note: response stopped after hitting max_output_tokens (${maxOutputTokens})._`;
 }
 
 function describeFetchToolCall(argumentsJson: string): string {

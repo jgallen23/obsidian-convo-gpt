@@ -40,6 +40,21 @@ describe("OpenAI client request metadata", () => {
 		expect(request.max_output_tokens).toBe(10000);
 	});
 
+	it("detects when a response stops at max_output_tokens", () => {
+		const client = new OpenAIClient(buildConfig());
+		const completion = (
+			client as unknown as {
+				parseCompletion: (response: unknown, streamedText?: string, emittedMcpNoticeKeys?: Set<string>) => { hitMaxOutputTokens: boolean };
+			}
+		).parseCompletion({
+			incomplete_details: {
+				reason: "max_output_tokens",
+			},
+		});
+
+		expect(completion.hitMaxOutputTokens).toBe(true);
+	});
+
 	it("omits temperature from requests when it is unset", () => {
 		const client = new OpenAIClient(buildConfig({ temperature: undefined }));
 		const request = (

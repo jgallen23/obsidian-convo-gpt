@@ -36,6 +36,7 @@ export interface OpenAICompletion {
 	text: string;
 	sourcesAppendix: string;
 	mcpNotices: string[];
+	hitMaxOutputTokens: boolean;
 }
 
 export interface OpenAITurn {
@@ -44,6 +45,7 @@ export interface OpenAITurn {
 	sourcesAppendix: string;
 	toolCalls: ResponseFunctionToolCall[];
 	mcpNotices: string[];
+	hitMaxOutputTokens: boolean;
 }
 
 export interface CreateTurnParams {
@@ -141,6 +143,7 @@ export class OpenAIClient {
 			sourcesAppendix: formatWebSearchSources(extractResponseSources(finalResponse)),
 			toolCalls,
 			mcpNotices: mcpActivities.map((activity) => activity.text),
+			hitMaxOutputTokens: didHitMaxOutputTokens(finalResponse),
 		};
 	}
 
@@ -175,6 +178,7 @@ export class OpenAIClient {
 			sourcesAppendix: formatWebSearchSources(extractResponseSources(response)),
 			toolCalls,
 			mcpNotices: mcpActivities.map((activity) => activity.text),
+			hitMaxOutputTokens: didHitMaxOutputTokens(response),
 		};
 	}
 
@@ -328,6 +332,7 @@ export class OpenAIClient {
 			text,
 			sourcesAppendix,
 			mcpNotices: mcpActivities.map((activity) => activity.text),
+			hitMaxOutputTokens: didHitMaxOutputTokens(response),
 		};
 	}
 }
@@ -394,6 +399,12 @@ function extractMcpActivities(response: unknown): McpActivityEntry[] {
 	const record = toRecord(response);
 	const output = Array.isArray(record.output) ? record.output : [];
 	return output.flatMap((item) => extractMcpActivitiesFromItem(item));
+}
+
+function didHitMaxOutputTokens(response: unknown): boolean {
+	const record = toRecord(response);
+	const incompleteDetails = toRecord(record.incomplete_details);
+	return incompleteDetails.reason === "max_output_tokens";
 }
 
 function extractMcpActivitiesFromItem(item: unknown): McpActivityEntry[] {

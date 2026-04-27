@@ -1136,6 +1136,35 @@ Use the docs MCP.`);
 		expect(editor.getValue()).toContain("- Tool: docs.search_docs");
 	});
 
+	it("appends a note when the response hits max_output_tokens", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		createMock.mockResolvedValue({
+			text: "Cut off answer.",
+			sourcesAppendix: "",
+			mcpNotices: [],
+			hitMaxOutputTokens: true,
+		});
+
+		const editor = createEditor(`---
+stream: false
+max_tokens: 10000
+---
+# _You (1)_
+
+Give me a very long answer.`);
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(editor.getValue()).toContain("Cut off answer.");
+		expect(editor.getValue()).toContain("_Note: response stopped after hitting max_output_tokens (10000)._");
+	});
+
 	it("appends MCP usage after tool-loop turns", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 		const briefFile = createFile("Docs/Brief.md");
