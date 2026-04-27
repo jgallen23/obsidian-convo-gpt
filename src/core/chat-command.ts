@@ -190,8 +190,14 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 
 	let completionText = "";
 	let sourcesAppendix = "";
+	let mcpUsageAppendix = "";
 	let shouldPlaceFinalCursor = true;
 	let shouldAttemptAutoRetitle = false;
+	const mcpNoticesUsed: string[] = [];
+	const recordMcpNotice = (text: string): void => {
+		requestStatus.notifyToolUse(text);
+		mcpNoticesUsed.push(text);
+	};
 	const shouldUseFetchTool = shouldOfferFetchTool(lastMessage.content, config.enableFetchTool);
 	const shouldUseMarkdownFileTool = shouldOfferMarkdownFileTool(
 		lastMessage.content,
@@ -232,6 +238,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					includeMarkdownFileTool: shouldUseMarkdownFileTool,
 					includeReferencedFileTool: shouldUseReferencedFileTool,
 					linkedDocument,
+					onMcpNotice: recordMcpNotice,
 					referencedFileReadState,
 					requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
 					stopBeforePlainAssistantTurn: config.stream,
@@ -266,6 +273,9 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 								requestStatus.notifyToolUse("Using web search");
 								requestStatus.setWebSearch();
 							},
+							onToolUse: (text) => {
+								recordMcpNotice(text);
+							},
 							onText: (delta) => {
 								if (!didSetStreamingStatus) {
 									requestStatus.setStreaming(config.model);
@@ -282,6 +292,9 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
 
 					if (streamedResponse.toolCalls.length === 0) {
+						for (const notice of streamedResponse.mcpNotices ?? []) {
+							recordMcpNotice(notice);
+						}
 						completionText = streamedText || streamedResponse.text;
 						const nextCompletionText = postProcessCompletionText(completionText, linkedDocument);
 						if (nextCompletionText !== completionText) {
@@ -311,6 +324,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 							includeMarkdownFileTool: shouldUseMarkdownFileTool,
 							includeReferencedFileTool: shouldUseReferencedFileTool,
 							linkedDocument,
+							onMcpNotice: recordMcpNotice,
 							referencedFileReadState,
 							requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
 							stopBeforePlainAssistantTurn: true,
@@ -334,10 +348,13 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			const writer = new StreamingWriter(editor, editor.offsetToPos(writeOffset));
 			writer.start();
 			let didSetStreamingStatus = false;
-			const completion = await client.stream(messages, {
+					const completion = await client.stream(messages, {
 				onSearchStart: () => {
 					requestStatus.notifyToolUse("Using web search");
 					requestStatus.setWebSearch();
+				},
+				onToolUse: (text) => {
+					recordMcpNotice(text);
 				},
 				onText: (delta) => {
 					if (!didSetStreamingStatus) {
@@ -352,6 +369,9 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			writer.stop();
 			writeOffset = editor.posToOffset(writer.getCursor());
 			shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
+			for (const notice of completion.mcpNotices ?? []) {
+				recordMcpNotice(notice);
+			}
 			const nextCompletionText = postProcessCompletionText(completionText, linkedDocument);
 			if (nextCompletionText !== completionText) {
 				editor.replaceRange(nextCompletionText, editor.offsetToPos(completionStartOffset), editor.offsetToPos(writeOffset));
@@ -362,15 +382,23 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			sourcesAppendix = completion.sourcesAppendix;
 		} else {
 			const completion = await client.create(messages);
+			for (const notice of completion.mcpNotices ?? []) {
+				recordMcpNotice(notice);
+			}
 			completionText = postProcessCompletionText(completion.text, linkedDocument);
 			sourcesAppendix = completion.sourcesAppendix;
 			editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
 			writeOffset += completionText.length;
 		}
 
+		mcpUsageAppendix = formatMcpUsageAppendix(mcpNoticesUsed);
 		if (sourcesAppendix) {
 			editor.replaceRange(sourcesAppendix, editor.offsetToPos(writeOffset));
 			writeOffset += sourcesAppendix.length;
+		}
+		if (mcpUsageAppendix) {
+			editor.replaceRange(mcpUsageAppendix, editor.offsetToPos(writeOffset));
+			writeOffset += mcpUsageAppendix.length;
 		}
 		shouldAttemptAutoRetitle = shouldAutoRetitle;
 	} catch (error) {
@@ -528,6 +556,7 @@ interface ToolConversationOptions {
 	includeMarkdownFileTool: boolean;
 	includeReferencedFileTool: boolean;
 	linkedDocument?: LinkedDocumentContext;
+	onMcpNotice?: (text: string) => void;
 	referencedFileReadState?: ReferencedFileReadState;
 	requireLinkedDocumentSave?: boolean;
 	stopBeforePlainAssistantTurn?: boolean;
@@ -606,6 +635,9 @@ async function resumeToolConversation(
 	startingRound: number,
 ): Promise<ToolConversationResult> {
 	for (let round = startingRound; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
+		for (const notice of response.mcpNotices ?? []) {
+			options.onMcpNotice?.(notice);
+		}
 		logConvoDebug("chat.toolConversation.round", {
 			round: round + 1,
 			responseId: response.responseId,
@@ -627,6 +659,7 @@ async function resumeToolConversation(
 				completion: {
 					text: response.text,
 					sourcesAppendix: `${response.sourcesAppendix}${formatToolConversationAppendix(state)}`,
+					mcpNotices: [],
 				},
 			};
 		}
@@ -751,6 +784,43 @@ async function resumeToolConversation(
 
 function formatToolConversationAppendix(state: ToolConversationState): string {
 	return `${formatReferencedFileAppendix(state.referencedFilesRead)}${formatFetchAppendix(state.fetchCalls)}`;
+}
+
+function formatMcpUsageAppendix(notices: string[]): string {
+	if (notices.length === 0) {
+		return "";
+	}
+
+	const seen = new Set<string>();
+	const lines: string[] = [];
+
+	for (const notice of notices) {
+		const trimmedNotice = notice.trim();
+		if (!trimmedNotice || seen.has(trimmedNotice)) {
+			continue;
+		}
+
+		seen.add(trimmedNotice);
+		const serverMatch = trimmedNotice.match(/^Using MCP server: (.+)$/);
+		if (serverMatch) {
+			lines.push(`- Server: ${serverMatch[1]}`);
+			continue;
+		}
+
+		const toolMatch = trimmedNotice.match(/^Using MCP tool: (.+)$/);
+		if (toolMatch) {
+			lines.push(`- Tool: ${toolMatch[1]}`);
+			continue;
+		}
+
+		lines.push(`- ${trimmedNotice}`);
+	}
+
+	if (lines.length === 0) {
+		return "";
+	}
+
+	return `\n\n### MCP usage\n${lines.join("\n")}`;
 }
 
 function describeFetchToolCall(argumentsJson: string): string {

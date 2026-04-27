@@ -7,7 +7,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	apiKey: "",
 	baseUrl: "https://api.openai.com/v1",
 	defaultModel: DEFAULT_MODEL,
-	defaultTemperature: 0.2,
+	defaultTemperature: undefined,
 	defaultMaxTokens: 4096,
 	stream: true,
 	agentFolder: "",
@@ -19,6 +19,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	enableReferencedFileReadTool: true,
 	enableDebugLogging: false,
 	referencedFileExtensions: [...DEFAULT_REFERENCED_FILE_EXTENSIONS],
+	enableMcpServers: false,
+	mcpServers: [],
 };
 
 export async function loadPluginSettings(plugin: Plugin): Promise<PluginSettings> {

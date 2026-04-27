@@ -1,5 +1,6 @@
 import { Notice, PluginSettingTab, Setting } from "obsidian";
 import type ConvoGptPlugin from "../main";
+import type { McpServerConfig } from "./types";
 
 export class ConvoGptSettingTab extends PluginSettingTab {
 	constructor(app: ConvoGptPlugin["app"], private readonly plugin: ConvoGptPlugin) {
@@ -58,10 +59,16 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Default temperature")
-			.setDesc("Used when a note or agent does not override temperature.")
+			.setDesc("Used when a note or agent does not override temperature. Leave blank to omit temperature entirely.")
 			.addText((text) =>
-				text.setValue(String(this.plugin.settings.defaultTemperature)).onChange(async (value) => {
-					const parsed = Number(value);
+				text.setValue(this.plugin.settings.defaultTemperature === undefined ? "" : String(this.plugin.settings.defaultTemperature)).onChange(async (value) => {
+					const trimmed = value.trim();
+					if (!trimmed) {
+						await this.plugin.updateSettings({ defaultTemperature: undefined });
+						return;
+					}
+
+					const parsed = Number(trimmed);
 					if (Number.isFinite(parsed)) {
 						await this.plugin.updateSettings({ defaultTemperature: parsed });
 					}
@@ -177,5 +184,167 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 						});
 					}),
 			);
+
+		containerEl.createEl("h3", { text: "MCP servers" });
+
+		new Setting(containerEl)
+			.setName("Enable MCP servers")
+			.setDesc("Registers enabled remote MCP servers for chat notes or agents that opt into them with mcp_servers. Headers are stored in plaintext plugin data.")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.enableMcpServers).onChange(async (value) => {
+					await this.plugin.updateSettings({ enableMcpServers: value });
+				}),
+			);
+
+		const mcpServersContainer = containerEl.createDiv();
+		const renderMcpServers = () => {
+			mcpServersContainer.empty();
+
+			if (this.plugin.settings.mcpServers.length === 0) {
+				mcpServersContainer.createEl("p", {
+					text: "No MCP servers configured. Add a server to make it available to chats or agents that opt in with mcp_servers.",
+				});
+				return;
+			}
+
+			this.plugin.settings.mcpServers.forEach((server) => {
+				const card = mcpServersContainer.createDiv({ cls: "convo-gpt-mcp-server-card" });
+				const titleEl = card.createEl("h4", { text: server.serverLabel || "New MCP server" });
+
+				new Setting(card)
+					.setName("Enabled")
+					.setDesc("Only enabled servers are sent to the OpenAI Responses API.")
+					.addToggle((toggle) =>
+						toggle.setValue(server.enabled).onChange(async (value) => {
+							await this.updateMcpServer(server.id, { enabled: value });
+						}),
+					)
+					.addExtraButton((button) =>
+						button.setIcon("trash").setTooltip("Remove MCP server").onClick(async () => {
+							await this.removeMcpServer(server.id);
+							renderMcpServers();
+						}),
+					);
+
+				new Setting(card)
+					.setName("Server label")
+					.setDesc("Used by OpenAI to identify this MCP server in tool calls.")
+					.addText((text) =>
+						text.setPlaceholder("docs").setValue(server.serverLabel).onChange(async (value) => {
+							await this.updateMcpServer(server.id, { serverLabel: value });
+							titleEl.setText(value.trim() || "New MCP server");
+						}),
+					);
+
+				new Setting(card)
+					.setName("Server URL")
+					.setDesc("Remote MCP endpoint URL.")
+					.addText((text) =>
+						text
+							.setPlaceholder("https://example.com/mcp")
+							.setValue(server.serverUrl)
+							.onChange(async (value) => {
+								await this.updateMcpServer(server.id, { serverUrl: value });
+							}),
+					);
+
+				new Setting(card)
+					.setName("Headers")
+					.setDesc("Optional HTTP headers, one per line as Header-Name: value. Stored in plaintext plugin data.")
+					.addTextArea((text) =>
+						text
+							.setPlaceholder("Authorization: Bearer ...")
+							.setValue(this.formatHeaderLines(server.headers))
+							.onChange(async (value) => {
+								await this.updateMcpServer(server.id, {
+									headers: this.parseHeaderLines(value),
+								});
+							}),
+					);
+
+				new Setting(card)
+					.setName("Allowed tool names")
+					.setDesc("Optional comma-separated allowlist. Leave blank to allow all tools exposed by the server.")
+					.addText((text) =>
+						text
+							.setPlaceholder("search_docs, get_page")
+							.setValue(server.allowedToolNames.join(", "))
+							.onChange(async (value) => {
+								await this.updateMcpServer(server.id, {
+									allowedToolNames: value
+										.split(",")
+										.map((entry) => entry.trim())
+										.filter((entry) => entry.length > 0),
+								});
+							}),
+					);
+			});
+		};
+
+		new Setting(containerEl)
+			.setName("Add MCP server")
+			.setDesc("Creates a new disabled MCP server entry.")
+			.addButton((button) =>
+				button.setButtonText("Add server").setCta().onClick(async () => {
+					await this.plugin.updateSettings({
+						mcpServers: [
+							...this.plugin.settings.mcpServers,
+							{
+								id: this.createMcpServerId(),
+								enabled: false,
+								serverLabel: "",
+								serverUrl: "",
+								headers: {},
+								allowedToolNames: [],
+							},
+						],
+					});
+					renderMcpServers();
+				}),
+			);
+
+		renderMcpServers();
+	}
+
+	private async updateMcpServer(id: string, patch: Partial<McpServerConfig>): Promise<void> {
+		await this.plugin.updateSettings({
+			mcpServers: this.plugin.settings.mcpServers.map((server) => (server.id === id ? { ...server, ...patch } : server)),
+		});
+	}
+
+	private async removeMcpServer(id: string): Promise<void> {
+		await this.plugin.updateSettings({
+			mcpServers: this.plugin.settings.mcpServers.filter((server) => server.id !== id),
+		});
+	}
+
+	private createMcpServerId(): string {
+		return `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+	}
+
+	private parseHeaderLines(text: string): Record<string, string> {
+		const headers: Record<string, string> = {};
+		for (const line of text.split("\n")) {
+			const separatorIndex = line.indexOf(":");
+			if (separatorIndex === -1) {
+				continue;
+			}
+
+			const name = line.slice(0, separatorIndex).trim();
+			const value = line.slice(separatorIndex + 1).trim();
+			if (!name) {
+				continue;
+			}
+
+			headers[name] = value;
+		}
+
+		return headers;
+	}
+
+	private formatHeaderLines(headers: Record<string, string>): string {
+		return Object.entries(headers)
+			.map(([name, value]) => `${name}: ${value}`)
+			.join("\n");
 	}
 }

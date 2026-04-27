@@ -167,8 +167,8 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 	return {
 		apiKey: "test-key",
 		baseUrl: "https://api.openai.com/v1",
-		defaultModel: "openai@gpt-5.4",
-		defaultTemperature: 0.2,
+		defaultModel: "openai@gpt-5.5",
+		defaultTemperature: undefined,
 		defaultMaxTokens: 4096,
 		stream: true,
 		agentFolder: "",
@@ -180,6 +180,8 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		enableReferencedFileReadTool: true,
 		enableDebugLogging: false,
 		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],
+		enableMcpServers: false,
+		mcpServers: [],
 		...overrides,
 	};
 }

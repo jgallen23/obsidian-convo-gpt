@@ -13,6 +13,7 @@ OpenAI-first markdown-native conversations inside Obsidian notes.
 - Markdown file save tool for creating or updating other notes with approval
 - Linked document mode for proposal/email/article style drafting against a bound markdown file
 - OpenAI native `web_search`
+- Optional remote MCP server tools configured in plugin settings
 - Bottom-of-answer appendices for web sources, referenced files, and fetch calls when used
 - Jump links at the end of every assistant response
 
@@ -65,7 +66,9 @@ Example chat note:
 ---
 agent: writing-coach
 document: [[Drafts/Proposal]]
-model: openai@gpt-5.4
+model: openai@gpt-5.5
+mcp_servers:
+  - weather
 ---
 
 # _You 1_
@@ -77,10 +80,12 @@ Example agent file at `Agents/writing-coach.md`:
 
 ```md
 ---
-model: openai@gpt-5.4
+model: openai@gpt-5.5
 temperature: 0.4
 max_tokens: 3000
 openai_native_web_search: false
+mcp_servers:
+  - weather
 system_commands:
   - Prefer concise edits.
   - Explain major changes briefly.
@@ -95,7 +100,7 @@ How agent resolution works:
 - The plugin looks only in the configured `Agent folder`.
 - The file match is basename-based, so `agent: writing-coach` matches `writing-coach.md`.
 - The agent file body becomes a system prompt.
-- Supported agent frontmatter overrides are `model`, `temperature`, `max_tokens`, `stream`, `system_commands`, `baseUrl`, and `openai_native_web_search`.
+- Supported agent frontmatter overrides are `model`, `temperature`, `max_tokens`, `stream`, `system_commands`, `mcp_servers`, `baseUrl`, and `openai_native_web_search`.
 
 ## Linked documents
 
@@ -157,6 +162,24 @@ If `Agent folder` is blank, agents are effectively disabled. If a note still set
 
 Convo GPT can expose a small set of model tools during a chat turn when the current message calls for them.
 
+### Remote MCP servers
+
+- MCP servers are configured in plugin settings as the global registry.
+- MCP servers are only included in a chat request when the current note or active agent opts into them with `mcp_servers`.
+- `mcp_servers` entries can match either the MCP server `id` or `server label`.
+- If neither the note nor the agent specifies `mcp_servers`, no MCP servers are attached to the request.
+- Header values for MCP servers are stored in plaintext plugin data. Obsidian community plugins do not have a separate secure secret store.
+- Note frontmatter wins over agent frontmatter when both specify `mcp_servers`.
+
+Example note frontmatter:
+
+```md
+---
+mcp_servers:
+  - weather
+---
+```
+
 ### Referenced file reads
 
 - The plugin can read linked files from the current chat note or active agent prompt on demand instead of inlining them up front.
@@ -190,6 +213,7 @@ Notable plugin settings:
 - `Enable fetch tool`: allows the model to make outbound HTTP or HTTPS requests for explicit URLs.
 - `Enable markdown file save tool`: allows the model to request markdown file writes with approval.
 - `Enable referenced file read tool`: allows the model to read linked files on demand.
+- `Enable MCP servers`: allows enabled remote MCP servers from plugin settings to be available for notes or agents that opt into them with `mcp_servers`.
 - `Referenced file extensions`: comma-separated list of readable linked file extensions.
 
 ## Quality checks

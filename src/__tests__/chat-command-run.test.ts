@@ -937,7 +937,7 @@ Update the proposal using [[Brief]].`);
 			}),
 			expect.anything(),
 		);
-		expect(requestStatus.setStreaming).toHaveBeenCalledWith("openai@gpt-5.4");
+		expect(requestStatus.setStreaming).toHaveBeenCalledWith("openai@gpt-5.5");
 		expect(editor.getValue()).toContain("Final streamed answer.");
 		expect(editor.getValue()).toContain("### Referenced files");
 	});
@@ -1037,6 +1037,159 @@ Update the proposal using [[Brief]].`);
 		expect(requestStatus.setWebSearch).toHaveBeenCalledTimes(1);
 		expect(editor.getValue()).toContain("Search-backed answer.");
 		expect(editor.getValue()).not.toContain("Using web search");
+	});
+
+	it("shows notices for streamed MCP server discovery and MCP tool calls", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const requestStatus = buildRequestStatus();
+
+		streamMock.mockImplementation(async (_messages, callbacks) => {
+			callbacks.onToolUse?.("Using MCP server: docs");
+			callbacks.onToolUse?.("Using MCP tool: docs.search_docs");
+			callbacks.onText("MCP-backed answer.");
+			return {
+				text: "MCP-backed answer.",
+				sourcesAppendix: "",
+				mcpNotices: [],
+			};
+		});
+
+		const editor = createEditor("# _You (1)_\n\nAnswer using the docs MCP.");
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus,
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using MCP server: docs");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using MCP tool: docs.search_docs");
+		expect(editor.getValue()).toContain("MCP-backed answer.");
+		expect(editor.getValue()).toContain("### MCP usage");
+		expect(editor.getValue()).toContain("- Server: docs");
+		expect(editor.getValue()).toContain("- Tool: docs.search_docs");
+	});
+
+	it("appends streamed MCP tool usage discovered only after stream completion", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const requestStatus = buildRequestStatus();
+
+		streamMock.mockImplementation(async (_messages, callbacks) => {
+			callbacks.onToolUse?.("Using MCP server: weather");
+			callbacks.onText("Weekly weather answer.");
+			return {
+				text: "Weekly weather answer.",
+				sourcesAppendix: "",
+				mcpNotices: ["Using MCP tool: weather.get_forecast"],
+			};
+		});
+
+		const editor = createEditor("# _You (1)_\n\nWhat is the weather in El Segundo this week?");
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus,
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using MCP server: weather");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using MCP tool: weather.get_forecast");
+		expect(editor.getValue()).toContain("### MCP usage");
+		expect(editor.getValue()).toContain("- Server: weather");
+		expect(editor.getValue()).toContain("- Tool: weather.get_forecast");
+	});
+
+	it("shows notices for non-streaming MCP usage", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const requestStatus = buildRequestStatus();
+
+		createMock.mockResolvedValue({
+			text: "Non-streaming MCP answer.",
+			sourcesAppendix: "",
+			mcpNotices: ["Using MCP server: docs", "Using MCP tool: docs.search_docs"],
+		});
+
+		const editor = createEditor(`---
+stream: false
+---
+# _You (1)_
+
+Use the docs MCP.`);
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestStatus,
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using MCP server: docs");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using MCP tool: docs.search_docs");
+		expect(editor.getValue()).toContain("Non-streaming MCP answer.");
+		expect(editor.getValue()).toContain("### MCP usage");
+		expect(editor.getValue()).toContain("- Server: docs");
+		expect(editor.getValue()).toContain("- Tool: docs.search_docs");
+	});
+
+	it("appends MCP usage after tool-loop turns", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const briefFile = createFile("Docs/Brief.md");
+		const requestStatus = buildRequestStatus();
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_read",
+						name: "read_referenced_file",
+						arguments: JSON.stringify({ reference: "Brief" }),
+					},
+				],
+				mcpNotices: ["Using MCP server: docs", "Using MCP tool: docs.search_docs"],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Summarized with MCP context.",
+				sourcesAppendix: "",
+				toolCalls: [],
+				mcpNotices: ["Using MCP tool: docs.search_docs"],
+			});
+
+		const app = buildApp(
+			noteFile,
+			{
+				"Brief|Notes/Chat.md": briefFile,
+			},
+			{
+				"Docs/Brief.md": "Short brief.",
+			},
+		);
+		const editor = createEditor("# _You (1)_\n\nRead [[Brief]] and answer with the docs MCP.");
+
+		await runChatCommand({
+			app: app as never,
+			editor: editor as never,
+			requestStatus,
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using MCP server: docs");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using MCP tool: docs.search_docs");
+		expect(editor.getValue()).toContain("Summarized with MCP context.");
+		expect(editor.getValue()).toContain("### Referenced files");
+		expect(editor.getValue()).toContain("### MCP usage");
+		expect(editor.getValue()).toContain("- Server: docs");
+		expect(editor.getValue()).toContain("- Tool: docs.search_docs");
 	});
 
 	it("does not expose fetch for a plain url without explicit request intent", async () => {
@@ -1151,8 +1304,8 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 	return {
 		apiKey: "test-key",
 		baseUrl: "https://api.openai.com/v1",
-		defaultModel: "openai@gpt-5.4",
-		defaultTemperature: 0.2,
+		defaultModel: "openai@gpt-5.5",
+		defaultTemperature: undefined,
 		defaultMaxTokens: 4096,
 		stream: true,
 		agentFolder: "Agents",
@@ -1164,6 +1317,8 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		enableReferencedFileReadTool: true,
 		enableDebugLogging: false,
 		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],
+		enableMcpServers: false,
+		mcpServers: [],
 		...overrides,
 	};
 }

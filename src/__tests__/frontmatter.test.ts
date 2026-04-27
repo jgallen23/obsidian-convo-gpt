@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	normalizeMcpServerConfigs,
 	normalizeReferencedFileExtensions,
 	parseNoteDocument,
 	parseNoteOverrides,
@@ -7,7 +8,7 @@ import {
 	sanitizeSettings,
 	stripFrontmatter,
 } from "../core/frontmatter";
-import { DEFAULT_SYSTEM_PROMPT } from "../core/constants";
+import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT } from "../core/constants";
 
 describe("frontmatter helpers", () => {
 	it("parses note overrides and strips the frontmatter from the body", () => {
@@ -35,6 +36,12 @@ Hello`;
 		expect(parseNoteOverrides({ system_commands: "Test" }).system_commands).toEqual(["Test"]);
 	});
 
+	it("parses mcp_servers as a normalized optional string list", () => {
+		expect(parseNoteOverrides({ mcp_servers: " weather " }).mcp_servers).toEqual(["weather"]);
+		expect(parseNoteOverrides({ mcp_servers: [" weather ", "", "docs", "weather"] }).mcp_servers).toEqual(["weather", "docs"]);
+		expect(parseNoteOverrides({}).mcp_servers).toBeUndefined();
+	});
+
 	it("preserves document when sibling frontmatter fields are blank", () => {
 		expect(
 			parseNoteOverrides({
@@ -46,16 +53,24 @@ Hello`;
 
 	it("sanitizes settings with defaults", () => {
 		const settings = sanitizeSettings({});
-		expect(settings.defaultModel).toBe("openai@gpt-5.4");
+		expect(settings.defaultModel).toBe(DEFAULT_MODEL);
+		expect(settings.defaultTemperature).toBeUndefined();
 		expect(settings.enableOpenAINativeWebSearch).toBe(true);
 		expect(settings.enableFetchTool).toBe(true);
 		expect(settings.enableMarkdownFileTool).toBe(true);
 		expect(settings.enableReferencedFileReadTool).toBe(true);
 		expect(settings.enableDebugLogging).toBe(false);
 		expect(settings.referencedFileExtensions).toEqual(["md", "txt", "csv", "json", "yaml"]);
+		expect(settings.enableMcpServers).toBe(false);
+		expect(settings.mcpServers).toEqual([]);
 		expect(settings.agentFolder).toBe("");
 		expect(settings.chatsFolder).toBe("chats/");
 		expect(settings.defaultSystemPrompt).toBe(DEFAULT_SYSTEM_PROMPT);
+	});
+
+	it("preserves an explicitly unset default temperature", () => {
+		const settings = sanitizeSettings({ defaultTemperature: undefined });
+		expect(settings.defaultTemperature).toBeUndefined();
 	});
 
 	it("strips frontmatter from content", () => {
@@ -69,6 +84,52 @@ Hello`;
 
 	it("normalizes referenced file extensions", () => {
 		expect(normalizeReferencedFileExtensions([".MD", " txt ", "", "json", "md"])).toEqual(["md", "txt", "json"]);
+	});
+
+	it("normalizes MCP server configs and preserves incomplete editable rows", () => {
+		expect(
+			normalizeMcpServerConfigs([
+				{
+					id: "docs",
+					enabled: true,
+					serverLabel: " Docs ",
+					serverUrl: " https://example.com/mcp ",
+					headers: {
+						Authorization: "Bearer token",
+						" ": "skip",
+					},
+					allowedToolNames: [" search_docs ", "", "search_docs", "get_page"],
+				},
+				{
+					id: "",
+					enabled: false,
+					serverLabel: "",
+					serverUrl: "",
+					headers: null,
+					allowedToolNames: null,
+				},
+				null,
+			]),
+		).toEqual([
+			{
+				id: "docs",
+				enabled: true,
+				serverLabel: "Docs",
+				serverUrl: "https://example.com/mcp",
+				headers: {
+					Authorization: "Bearer token",
+				},
+				allowedToolNames: ["search_docs", "get_page"],
+			},
+			{
+				id: "mcp-2",
+				enabled: false,
+				serverLabel: "",
+				serverUrl: "",
+				headers: {},
+				allowedToolNames: [],
+			},
+		]);
 	});
 
 	it("adds or updates a frontmatter field", () => {

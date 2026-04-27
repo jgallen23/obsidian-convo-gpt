@@ -21,15 +21,25 @@ export interface NoteOverrides {
 	agent?: string;
 	document?: string;
 	system_commands?: string[];
+	mcp_servers?: string[];
 	baseUrl?: string;
 	openai_native_web_search?: boolean;
+}
+
+export interface McpServerConfig {
+	id: string;
+	enabled: boolean;
+	serverLabel: string;
+	serverUrl: string;
+	headers: Record<string, string>;
+	allowedToolNames: string[];
 }
 
 export interface PluginSettings {
 	apiKey: string;
 	baseUrl: string;
 	defaultModel: string;
-	defaultTemperature: number;
+	defaultTemperature?: number;
 	defaultMaxTokens: number;
 	stream: boolean;
 	agentFolder: string;
@@ -41,13 +51,15 @@ export interface PluginSettings {
 	enableReferencedFileReadTool: boolean;
 	enableDebugLogging: boolean;
 	referencedFileExtensions: string[];
+	enableMcpServers: boolean;
+	mcpServers: McpServerConfig[];
 }
 
 export interface ResolvedChatConfig {
 	apiKey: string;
 	baseUrl: string;
 	model: string;
-	temperature: number;
+	temperature?: number;
 	max_tokens: number;
 	stream: boolean;
 	agent?: string;
@@ -58,6 +70,8 @@ export interface ResolvedChatConfig {
 	enableMarkdownFileTool: boolean;
 	enableReferencedFileReadTool: boolean;
 	referencedFileExtensions: string[];
+	enableMcpServers: boolean;
+	mcpServers: McpServerConfig[];
 }
 
 export interface AgentDefinition {

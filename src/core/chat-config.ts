@@ -1,14 +1,18 @@
-import type { PluginSettings, ResolvedChatConfig } from "./types";
+import type { McpServerConfig, NoteOverrides, PluginSettings, ResolvedChatConfig } from "./types";
 
 export function resolveChatConfig(
 	settings: PluginSettings,
-	agentOverrides: Partial<ResolvedChatConfig> | undefined,
-	noteOverrides: Partial<ResolvedChatConfig>,
+	agentOverrides: NoteOverrides | undefined,
+	noteOverrides: NoteOverrides,
 ): ResolvedChatConfig {
 	const systemCommands = [
 		...(Array.isArray(agentOverrides?.system_commands) ? agentOverrides.system_commands : []),
 		...(Array.isArray(noteOverrides.system_commands) ? noteOverrides.system_commands : []),
 	];
+	const selectedMcpServers = resolveSelectedMcpServers(
+		settings.enableMcpServers ? settings.mcpServers : [],
+		noteOverrides.mcp_servers ?? agentOverrides?.mcp_servers,
+	);
 
 	return {
 		apiKey: settings.apiKey,
@@ -28,5 +32,24 @@ export function resolveChatConfig(
 		enableMarkdownFileTool: settings.enableMarkdownFileTool,
 		enableReferencedFileReadTool: settings.enableReferencedFileReadTool,
 		referencedFileExtensions: settings.referencedFileExtensions,
+		enableMcpServers: settings.enableMcpServers && selectedMcpServers.length > 0,
+		mcpServers: selectedMcpServers,
 	};
+}
+
+function resolveSelectedMcpServers(availableServers: McpServerConfig[], selectedNames: string[] | undefined): McpServerConfig[] {
+	if (!selectedNames || selectedNames.length === 0) {
+		return [];
+	}
+
+	const requested = new Set(selectedNames.map((name) => name.trim().toLowerCase()).filter((name) => name.length > 0));
+	if (requested.size === 0) {
+		return [];
+	}
+
+	return availableServers.filter((server) => {
+		const serverId = server.id.trim().toLowerCase();
+		const serverLabel = server.serverLabel.trim().toLowerCase();
+		return requested.has(serverId) || requested.has(serverLabel);
+	});
 }
