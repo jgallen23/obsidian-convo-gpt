@@ -15,12 +15,14 @@ export interface ResolvedNoteReference {
 const WIKI_LINK_REGEX = /\[\[([^[\]]+)\]\]/g;
 const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
 const URI_SCHEME_REGEX = /^[a-z][a-z0-9+.-]*:/i;
+const FENCED_CODE_BLOCK_LINE_REGEX = /^(\s*)(`{3,}|~{3,})/;
 
 export function findNoteReferences(message: string): NoteReference[] {
+	const searchText = stripFencedCodeBlocks(message);
 	const results: NoteReference[] = [];
 	const seen = new Set<string>();
 
-	for (const match of message.matchAll(WIKI_LINK_REGEX)) {
+	for (const match of searchText.matchAll(WIKI_LINK_REGEX)) {
 		const rawPath = match[1]?.split("|")[0]?.trim();
 		if (!rawPath || shouldIgnorePath(rawPath) || seen.has(rawPath)) {
 			continue;
@@ -34,7 +36,7 @@ export function findNoteReferences(message: string): NoteReference[] {
 		seen.add(rawPath);
 	}
 
-	for (const match of message.matchAll(MARKDOWN_LINK_REGEX)) {
+	for (const match of searchText.matchAll(MARKDOWN_LINK_REGEX)) {
 		const path = match[2]?.trim();
 		if (!path || shouldIgnorePath(path) || seen.has(path)) {
 			continue;
@@ -140,4 +142,33 @@ export function resolveNoteReferences(
 
 function shouldIgnorePath(path: string): boolean {
 	return path.includes("#") || URI_SCHEME_REGEX.test(path);
+}
+
+function stripFencedCodeBlocks(message: string): string {
+	const lines = message.split("\n");
+	const output: string[] = [];
+	let activeFenceMarker: string | null = null;
+
+	for (const line of lines) {
+		const fenceMatch = line.match(FENCED_CODE_BLOCK_LINE_REGEX);
+		if (fenceMatch) {
+			const marker = fenceMatch[2] ?? "";
+			const markerChar = marker[0];
+			if (!activeFenceMarker) {
+				activeFenceMarker = marker;
+				continue;
+			}
+
+			if (markerChar === activeFenceMarker[0] && marker.length >= activeFenceMarker.length) {
+				activeFenceMarker = null;
+				continue;
+			}
+		}
+
+		if (!activeFenceMarker) {
+			output.push(line);
+		}
+	}
+
+	return output.join("\n");
 }

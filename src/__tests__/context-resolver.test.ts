@@ -26,6 +26,36 @@ describe("context resolver", () => {
 		expect(refs[0]?.path).toBe("Note");
 	});
 
+	it("ignores wiki and markdown links inside fenced code blocks", () => {
+		const refs = findNoteReferences([
+			"Use [[Outside]].",
+			"",
+			"```md",
+			"[[Inside Wiki]]",
+			"[Inside Markdown](Docs/inside.md)",
+			"```",
+			"",
+			"And [Outside Markdown](Docs/outside.md).",
+		].join("\n"));
+
+		expect(refs).toHaveLength(2);
+		expect(refs[0]?.path).toBe("Outside");
+		expect(refs[1]?.path).toBe("Docs/outside.md");
+	});
+
+	it("ignores links inside tilde-fenced code blocks", () => {
+		const refs = findNoteReferences([
+			"~~~",
+			"[[Inside Only]]",
+			"~~~",
+			"",
+			"[[Outside Only]]",
+		].join("\n"));
+
+		expect(refs).toHaveLength(1);
+		expect(refs[0]?.path).toBe("Outside Only");
+	});
+
 	it("injects referenced note context relative to the current file", async () => {
 		const agentFile = { path: "Agents/writer.md" };
 		const styleGuideFile = { path: "Agents/Style Guide.md" };
