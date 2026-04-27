@@ -27,6 +27,19 @@ describe("OpenAI client request metadata", () => {
 		});
 	});
 
+	it("maps max_tokens to max_output_tokens in requests", () => {
+		const client = new OpenAIClient(buildConfig({ max_tokens: 10000 }));
+		const request = (
+			client as unknown as {
+				buildNonStreamingRequest: (messages: Array<{ role: string; content: string }>) => { max_output_tokens?: number };
+			}
+		).buildNonStreamingRequest([
+			{ role: "user", content: "Hello" },
+		]);
+
+		expect(request.max_output_tokens).toBe(10000);
+	});
+
 	it("omits temperature from requests when it is unset", () => {
 		const client = new OpenAIClient(buildConfig({ temperature: undefined }));
 		const request = (

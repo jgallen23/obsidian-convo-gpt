@@ -16,6 +16,34 @@ const booleanSchema = z.preprocess((value) => {
 	return value;
 }, z.boolean());
 
+const finiteNumberSchema = z.preprocess((value) => {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return value;
+		}
+
+		const parsed = Number(trimmed);
+		return Number.isFinite(parsed) ? parsed : value;
+	}
+
+	return value;
+}, z.number().finite());
+
+const positiveIntSchema = z.preprocess((value) => {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return value;
+		}
+
+		const parsed = Number(trimmed);
+		return Number.isFinite(parsed) ? parsed : value;
+	}
+
+	return value;
+}, z.number().int().positive());
+
 const stringArraySchema = z.preprocess((value) => {
 	if (typeof value === "string") {
 		return [value];
@@ -56,8 +84,8 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
 const noteOverridesSchema = z
 	.object({
 		model: optionalTrimmedStringSchema,
-		temperature: z.number().finite().optional(),
-		max_tokens: z.number().int().positive().optional(),
+		temperature: finiteNumberSchema.optional(),
+		max_tokens: positiveIntSchema.optional(),
 		stream: booleanSchema.optional(),
 		agent: optionalTrimmedStringSchema,
 		document: optionalTrimmedStringSchema,
@@ -72,8 +100,8 @@ const settingsSchema = z.object({
 	apiKey: z.string().default(""),
 	baseUrl: z.string().url().default("https://api.openai.com/v1"),
 	defaultModel: z.string().min(1).default(DEFAULT_MODEL),
-	defaultTemperature: z.number().finite().optional(),
-	defaultMaxTokens: z.number().int().positive().default(4096),
+	defaultTemperature: finiteNumberSchema.optional(),
+	defaultMaxTokens: positiveIntSchema.default(4096),
 	stream: z.boolean().default(true),
 	agentFolder: z.string().default(""),
 	chatsFolder: z.string().default("chats/"),
@@ -84,7 +112,7 @@ const settingsSchema = z.object({
 	enableReferencedFileReadTool: z.boolean().default(true),
 	enableDebugLogging: z.boolean().default(false),
 	referencedFileExtensions: extensionListSchema,
-	referencedFileReadMaxChars: z.number().int().positive().default(DEFAULT_REFERENCED_FILE_MAX_CHARS),
+	referencedFileReadMaxChars: positiveIntSchema.default(DEFAULT_REFERENCED_FILE_MAX_CHARS),
 	enableMcpServers: z.boolean().default(false),
 	mcpServers: z.array(z.unknown()).default([]),
 });

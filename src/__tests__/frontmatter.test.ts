@@ -36,6 +36,13 @@ Hello`;
 		expect(parseNoteOverrides({ system_commands: "Test" }).system_commands).toEqual(["Test"]);
 	});
 
+	it("coerces numeric frontmatter overrides from strings", () => {
+		expect(parseNoteOverrides({ max_tokens: "10000", temperature: "0.4" })).toMatchObject({
+			max_tokens: 10000,
+			temperature: 0.4,
+		});
+	});
+
 	it("parses mcp_servers as a normalized optional string list", () => {
 		expect(parseNoteOverrides({ mcp_servers: " weather " }).mcp_servers).toEqual(["weather"]);
 		expect(parseNoteOverrides({ mcp_servers: [" weather ", "", "docs", "weather"] }).mcp_servers).toEqual(["weather", "docs"]);
