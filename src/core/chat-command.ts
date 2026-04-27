@@ -132,7 +132,10 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 
 		let agentBody = agent?.body ?? "";
 		if (config.enableReferencedFileReadTool) {
-			referencedFileReadState = createReferencedFileReadState(config.referencedFileExtensions);
+			referencedFileReadState = createReferencedFileReadState(
+				config.referencedFileExtensions,
+				config.referencedFileReadMaxChars,
+			);
 
 			if (agent && agentBody.trim()) {
 				const missingReferences = addReferencedFileReadSeeds(app, referencedFileReadState, [
@@ -718,7 +721,13 @@ async function resumeToolConversation(
 
 			if (toolCall.name === REFERENCED_FILE_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
 				requestStatus.notifyToolUse(describeReferencedFileToolCall(toolCall.arguments));
-				const result = await executeReferencedFileReadToolCall(app, toolCall.arguments, options.referencedFileReadState);
+				const result = await executeReferencedFileReadToolCall(app, toolCall.arguments, options.referencedFileReadState, undefined, {
+					statusCallbacks: {
+						onWaitingForApproval: () => {
+							requestStatus.setWaitingForFileApproval();
+						},
+					},
+				});
 				logConvoDebug("chat.toolConversation.referencedFileResult", {
 					status: result.status,
 					path: "path" in result ? result.path ?? null : null,

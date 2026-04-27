@@ -32,6 +32,7 @@ export function resolveChatConfig(
 		enableMarkdownFileTool: settings.enableMarkdownFileTool,
 		enableReferencedFileReadTool: settings.enableReferencedFileReadTool,
 		referencedFileExtensions: settings.referencedFileExtensions,
+		referencedFileReadMaxChars: settings.referencedFileReadMaxChars,
 		enableMcpServers: settings.enableMcpServers && selectedMcpServers.length > 0,
 		mcpServers: selectedMcpServers,
 	};

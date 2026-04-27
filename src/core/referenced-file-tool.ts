@@ -12,7 +12,7 @@ export interface ReferencedFileReadRequest {
 }
 
 export interface ReferencedFileReadToolResult {
-	status: "success" | "validation_error";
+	status: "denied" | "success" | "validation_error";
 	message: string;
 	reference?: string;
 	path?: string;

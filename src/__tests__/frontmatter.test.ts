@@ -61,6 +61,7 @@ Hello`;
 		expect(settings.enableReferencedFileReadTool).toBe(true);
 		expect(settings.enableDebugLogging).toBe(false);
 		expect(settings.referencedFileExtensions).toEqual(["md", "txt", "csv", "json", "yaml"]);
+		expect(settings.referencedFileReadMaxChars).toBe(12000);
 		expect(settings.enableMcpServers).toBe(false);
 		expect(settings.mcpServers).toEqual([]);
 		expect(settings.agentFolder).toBe("");

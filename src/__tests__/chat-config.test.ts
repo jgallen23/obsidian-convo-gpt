@@ -71,6 +71,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		enableReferencedFileReadTool: true,
 		enableDebugLogging: false,
 		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],
+		referencedFileReadMaxChars: 12000,
 		enableMcpServers: true,
 		mcpServers: buildMcpServers(),
 		...overrides,

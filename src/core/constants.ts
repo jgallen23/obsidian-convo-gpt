@@ -8,3 +8,4 @@ When appropriate, end with an open question to keep the conversation helpful and
 export const CHAT_HEADING_PREFIX = "#";
 export const DEFAULT_MODEL = "openai@gpt-5.5";
 export const DEFAULT_REFERENCED_FILE_EXTENSIONS = ["md", "txt", "csv", "json", "yaml"] as const;
+export const DEFAULT_REFERENCED_FILE_MAX_CHARS = 12000;

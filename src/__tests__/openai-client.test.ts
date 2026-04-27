@@ -271,6 +271,7 @@ function buildConfig(overrides: Partial<ResolvedChatConfig> = {}): ResolvedChatC
 		enableMarkdownFileTool: true,
 		enableReferencedFileReadTool: true,
 		referencedFileExtensions: ["md", "txt", "csv", "json", "yaml"],
+		referencedFileReadMaxChars: 12000,
 		enableMcpServers: false,
 		mcpServers: [],
 		...overrides,

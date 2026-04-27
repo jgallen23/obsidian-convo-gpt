@@ -1,6 +1,6 @@
 import matter from "gray-matter";
 import { z } from "zod";
-import { DEFAULT_MODEL, DEFAULT_REFERENCED_FILE_EXTENSIONS, DEFAULT_SYSTEM_PROMPT } from "./constants";
+import { DEFAULT_MODEL, DEFAULT_REFERENCED_FILE_EXTENSIONS, DEFAULT_REFERENCED_FILE_MAX_CHARS, DEFAULT_SYSTEM_PROMPT } from "./constants";
 import type { McpServerConfig, NoteOverrides, ParsedNoteDocument, PluginSettings } from "./types";
 
 const booleanSchema = z.preprocess((value) => {
@@ -84,6 +84,7 @@ const settingsSchema = z.object({
 	enableReferencedFileReadTool: z.boolean().default(true),
 	enableDebugLogging: z.boolean().default(false),
 	referencedFileExtensions: extensionListSchema,
+	referencedFileReadMaxChars: z.number().int().positive().default(DEFAULT_REFERENCED_FILE_MAX_CHARS),
 	enableMcpServers: z.boolean().default(false),
 	mcpServers: z.array(z.unknown()).default([]),
 });

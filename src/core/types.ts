@@ -51,6 +51,7 @@ export interface PluginSettings {
 	enableReferencedFileReadTool: boolean;
 	enableDebugLogging: boolean;
 	referencedFileExtensions: string[];
+	referencedFileReadMaxChars: number;
 	enableMcpServers: boolean;
 	mcpServers: McpServerConfig[];
 }
@@ -70,6 +71,7 @@ export interface ResolvedChatConfig {
 	enableMarkdownFileTool: boolean;
 	enableReferencedFileReadTool: boolean;
 	referencedFileExtensions: string[];
+	referencedFileReadMaxChars: number;
 	enableMcpServers: boolean;
 	mcpServers: McpServerConfig[];
 }

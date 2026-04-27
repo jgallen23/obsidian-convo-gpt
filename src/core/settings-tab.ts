@@ -185,6 +185,18 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		new Setting(containerEl)
+			.setName("Referenced file auto-read max chars")
+			.setDesc("Files larger than this prompt for approval to send a truncated preview or the full file.")
+			.addText((text) =>
+				text.setValue(String(this.plugin.settings.referencedFileReadMaxChars)).onChange(async (value) => {
+					const parsed = Number.parseInt(value.trim(), 10);
+					if (Number.isInteger(parsed) && parsed > 0) {
+						await this.plugin.updateSettings({ referencedFileReadMaxChars: parsed });
+					}
+				}),
+			);
+
 		containerEl.createEl("h3", { text: "MCP servers" });
 
 		new Setting(containerEl)

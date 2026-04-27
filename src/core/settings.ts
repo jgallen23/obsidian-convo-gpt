@@ -1,5 +1,5 @@
 import type { Plugin } from "obsidian";
-import { DEFAULT_MODEL, DEFAULT_REFERENCED_FILE_EXTENSIONS, DEFAULT_SYSTEM_PROMPT } from "./constants";
+import { DEFAULT_MODEL, DEFAULT_REFERENCED_FILE_EXTENSIONS, DEFAULT_REFERENCED_FILE_MAX_CHARS, DEFAULT_SYSTEM_PROMPT } from "./constants";
 import { sanitizeSettings } from "./frontmatter";
 import type { PluginSettings } from "./types";
 
@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	enableReferencedFileReadTool: true,
 	enableDebugLogging: false,
 	referencedFileExtensions: [...DEFAULT_REFERENCED_FILE_EXTENSIONS],
+	referencedFileReadMaxChars: DEFAULT_REFERENCED_FILE_MAX_CHARS,
 	enableMcpServers: false,
 	mcpServers: [],
 };

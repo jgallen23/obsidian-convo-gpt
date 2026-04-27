@@ -1,15 +1,35 @@
-import { TFile, type App } from "obsidian";
+import { Modal, Setting, TFile, type App } from "obsidian";
+import { DEFAULT_REFERENCED_FILE_MAX_CHARS } from "./constants";
 import { resolveNoteReferences } from "./context-resolver";
 import {
 	normalizeReferencedFileLookup,
 	parseReferencedFileReadRequest,
 	type ReferencedFileReadToolResult,
 } from "./referenced-file-tool";
-const MAX_REFERENCED_FILE_CONTENT_CHARS = 12000;
+
+export type OversizedReferencedFileDecision = "cancel" | "full" | "truncate";
+
+export interface ReferencedFileReadApprovalRequest {
+	maxChars: number;
+	path: string;
+	sizeChars: number;
+}
+
+export type ReferencedFileReadApprover = (request: ReferencedFileReadApprovalRequest) => Promise<OversizedReferencedFileDecision>;
+
+export interface ReferencedFileReadStatusCallbacks {
+	onWaitingForApproval?: () => void;
+}
+
+export interface ReferencedFileReadExecutionOptions {
+	statusCallbacks?: ReferencedFileReadStatusCallbacks;
+}
 
 export interface ReferencedFileReadState {
 	aliasMap: Map<string, Set<string>>;
 	allowedPaths: Set<string>;
+	maxContentChars: number;
+	oversizedReadDecisions: Map<string, Extract<OversizedReferencedFileDecision, "full" | "truncate">>;
 	supportedExtensions: Set<string>;
 }
 
@@ -18,10 +38,15 @@ export interface ReferencedFileReadSeed {
 	currentFile: TFile | null;
 }
 
-export function createReferencedFileReadState(supportedExtensions: string[]): ReferencedFileReadState {
+export function createReferencedFileReadState(
+	supportedExtensions: string[],
+	maxContentChars = DEFAULT_REFERENCED_FILE_MAX_CHARS,
+): ReferencedFileReadState {
 	return {
 		aliasMap: new Map(),
 		allowedPaths: new Set(),
+		maxContentChars,
+		oversizedReadDecisions: new Map(),
 		supportedExtensions: new Set(supportedExtensions.map((extension) => extension.toLowerCase())),
 	};
 }
@@ -56,6 +81,8 @@ export async function executeReferencedFileReadToolCall(
 	app: App,
 	argumentsJson: string,
 	state: ReferencedFileReadState,
+	approver: ReferencedFileReadApprover = (request) => requestReferencedFileReadApproval(app, request),
+	options: ReferencedFileReadExecutionOptions = {},
 ): Promise<ReferencedFileReadToolResult> {
 	const parsed = parseReferencedFileReadRequest(argumentsJson);
 	if (!parsed.success) {
@@ -102,8 +129,33 @@ export async function executeReferencedFileReadToolCall(
 	}
 
 	const rawContent = await app.vault.read(existing);
-	const truncated = rawContent.length > MAX_REFERENCED_FILE_CONTENT_CHARS;
-	const content = truncated ? `${rawContent.slice(0, MAX_REFERENCED_FILE_CONTENT_CHARS)}\n…` : rawContent;
+	const oversized = rawContent.length > state.maxContentChars;
+	const cachedDecision = oversized ? state.oversizedReadDecisions.get(existing.path) : undefined;
+	const decision =
+		oversized && cachedDecision === undefined
+			? await requestOversizedReferencedFileDecision(approver, options.statusCallbacks, {
+					path: existing.path,
+					sizeChars: rawContent.length,
+					maxChars: state.maxContentChars,
+				})
+			: cachedDecision ?? "truncate";
+
+	if (decision === "cancel") {
+		return {
+			status: "denied",
+			message: `User declined to read oversized referenced file ${existing.path}.`,
+			reference,
+			path: existing.path,
+			fileType: existing.extension.toLowerCase(),
+		};
+	}
+
+	if (oversized) {
+		state.oversizedReadDecisions.set(existing.path, decision);
+	}
+
+	const truncated = oversized && decision === "truncate";
+	const content = truncated ? `${rawContent.slice(0, state.maxContentChars)}\n…` : rawContent;
 
 	return {
 		status: "success",
@@ -112,7 +164,9 @@ export async function executeReferencedFileReadToolCall(
 				? `Read empty ${existing.extension} file ${existing.path}.`
 				: truncated
 					? `Read ${existing.extension} file ${existing.path} (truncated).`
-					: `Read ${existing.extension} file ${existing.path}.`,
+					: oversized
+						? `Read full ${existing.extension} file ${existing.path} after approval.`
+						: `Read ${existing.extension} file ${existing.path}.`,
 		reference,
 		path: existing.path,
 		fileType: existing.extension.toLowerCase(),
@@ -153,6 +207,15 @@ function addAlias(aliasMap: Map<string, Set<string>>, alias: string, resolvedPat
 	aliasMap.set(alias, new Set([resolvedPath]));
 }
 
+async function requestOversizedReferencedFileDecision(
+	approver: ReferencedFileReadApprover,
+	statusCallbacks: ReferencedFileReadStatusCallbacks | undefined,
+	request: ReferencedFileReadApprovalRequest,
+): Promise<OversizedReferencedFileDecision> {
+	statusCallbacks?.onWaitingForApproval?.();
+	return approver(request);
+}
+
 function resolveAllowedReferencedPath(
 	state: ReferencedFileReadState,
 	reference: string,
@@ -185,6 +248,15 @@ function resolveAllowedReferencedPath(
 	};
 }
 
+export function requestReferencedFileReadApproval(
+	app: App,
+	request: ReferencedFileReadApprovalRequest,
+): Promise<OversizedReferencedFileDecision> {
+	return new Promise((resolve) => {
+		new OversizedReferencedFileReadApprovalModal(app, request, resolve).open();
+	});
+}
+
 function isSupportedReferencedFile(file: TFile, supportedExtensions: Set<string>): boolean {
 	return supportedExtensions.has(file.extension.toLowerCase());
 }
@@ -196,4 +268,65 @@ function buildSupportedExtensionPattern(supportedExtensions: Set<string>): RegEx
 
 	const escapedExtensions = Array.from(supportedExtensions).map((extension) => extension.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 	return new RegExp(`\\.(${escapedExtensions.join("|")})$`, "i");
+}
+
+class OversizedReferencedFileReadApprovalModal extends Modal {
+	private settled = false;
+
+	constructor(
+		app: App,
+		private readonly request: ReferencedFileReadApprovalRequest,
+		private readonly resolveDecision: (decision: OversizedReferencedFileDecision) => void,
+	) {
+		super(app);
+	}
+
+	override onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.createEl("h2", { text: "Large referenced file" });
+		contentEl.createEl("p", {
+			text: `${this.request.path} is ${formatCount(this.request.sizeChars)} characters, which exceeds the auto-read limit of ${formatCount(this.request.maxChars)} characters.`,
+		});
+		contentEl.createEl("p", {
+			text: "Choose whether to send a truncated preview or the full file to the model for this turn.",
+		});
+
+		new Setting(contentEl)
+			.addButton((button) =>
+				button.setButtonText(`Read first ${formatCount(this.request.maxChars)} chars`).setCta().onClick(() => {
+					this.settle("truncate");
+				}),
+			)
+			.addButton((button) =>
+				button.setButtonText("Send full file").onClick(() => {
+					this.settle("full");
+				}),
+			)
+			.addExtraButton((button) =>
+				button.setIcon("cross").setTooltip("Cancel").onClick(() => {
+					this.settle("cancel");
+				}),
+			);
+	}
+
+	override onClose(): void {
+		if (!this.settled) {
+			this.resolveDecision("cancel");
+		}
+	}
+
+	private settle(decision: OversizedReferencedFileDecision): void {
+		if (this.settled) {
+			return;
+		}
+
+		this.settled = true;
+		this.resolveDecision(decision);
+		this.close();
+	}
+}
+
+function formatCount(value: number): string {
+	return value.toLocaleString("en-US");
 }
