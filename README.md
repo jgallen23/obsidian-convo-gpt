@@ -66,7 +66,7 @@ Example chat note:
 ---
 agent: writing-coach
 document: [[Drafts/Proposal]]
-model: openai@gpt-5.5
+model: openai@gpt-5.4
 mcp_servers:
   - weather
 ---
@@ -80,7 +80,7 @@ Example agent file at `Agents/writing-coach.md`:
 
 ```md
 ---
-model: openai@gpt-5.5
+model: openai@gpt-5.4
 temperature: 0.4
 max_tokens: 3000
 openai_native_web_search: false

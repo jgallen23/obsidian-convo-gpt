@@ -937,7 +937,7 @@ Update the proposal using [[Brief]].`);
 			}),
 			expect.anything(),
 		);
-		expect(requestStatus.setStreaming).toHaveBeenCalledWith("openai@gpt-5.5");
+		expect(requestStatus.setStreaming).toHaveBeenCalledWith("openai@gpt-5.4");
 		expect(editor.getValue()).toContain("Final streamed answer.");
 		expect(editor.getValue()).toContain("### Referenced files");
 	});
@@ -1304,8 +1304,8 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 	return {
 		apiKey: "test-key",
 		baseUrl: "https://api.openai.com/v1",
-		defaultModel: "openai@gpt-5.5",
-		defaultTemperature: undefined,
+		defaultModel: "openai@gpt-5.4",
+		defaultTemperature: 0.2,
 		defaultMaxTokens: 4096,
 		stream: true,
 		agentFolder: "Agents",

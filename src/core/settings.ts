@@ -7,7 +7,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	apiKey: "",
 	baseUrl: "https://api.openai.com/v1",
 	defaultModel: DEFAULT_MODEL,
-	defaultTemperature: undefined,
+	defaultTemperature: 0.2,
 	defaultMaxTokens: 4096,
 	stream: true,
 	agentFolder: "",
