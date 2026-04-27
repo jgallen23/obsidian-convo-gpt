@@ -8,13 +8,13 @@ OpenAI-first markdown-native conversations inside Obsidian notes.
 - Section-based chat format inside a markdown note
 - OpenAI-only requests with per-note frontmatter overrides
 - Agent prompts loaded from a configurable agent folder
-- On-demand linked file reads for chat notes and agent prompts, with configurable supported extensions
+- On-demand linked file reads and search for chat notes and agent prompts, with configurable supported extensions
 - On-demand HTTP fetch tool for explicit `http(s)` URLs with custom headers and basic API-call support
 - Markdown file save tool for creating or updating other notes with approval
 - Linked document mode for proposal/email/article style drafting against a bound markdown file
 - OpenAI native `web_search`
 - Optional remote MCP server tools configured in plugin settings
-- Bottom-of-answer appendices for web sources, referenced files, and fetch calls when used
+- Bottom-of-answer appendices for web sources, referenced files, referenced-file searches and sections, markdown saves, and fetch calls when used
 - Jump links at the end of every assistant response
 
 ## Development
@@ -183,6 +183,8 @@ mcp_servers:
 ### Referenced file reads
 
 - The plugin can read linked files from the current chat note or active agent prompt on demand instead of inlining them up front.
+- For oversized referenced files, the model can search within the file first and only request a full read if needed.
+- Search results include line ranges, and the model can read the enclosing section for a matching line without loading the whole file.
 - Supported extensions are configurable in plugin settings. The default list is `md, txt, csv, json, yaml`.
 - When referenced files are used, the assistant appends a `### Referenced files` block at the bottom of the answer with clickable `[[wiki links]]`.
 

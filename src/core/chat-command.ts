@@ -29,23 +29,35 @@ import {
 	addReferencedFileReadSeeds,
 	createReferencedFileReadState,
 	executeReferencedFileReadToolCall,
+	executeReferencedFileSearchToolCall,
+	executeReferencedFileSectionToolCall,
 	type ReferencedFileReadState,
 } from "./referenced-file-service";
 import {
 	buildMarkdownFileToolPolicy,
+	formatMarkdownWriteAppendix,
 	MAX_MARKDOWN_TOOL_ROUNDS,
 	MARKDOWN_FILE_TOOL_NAME,
 	parseMarkdownWriteRequest,
 	shouldOfferMarkdownFileTool,
+	type MarkdownWriteSummary,
 } from "./markdown-file-tool";
 import {
 	buildFunctionCallOutput,
+	formatReferencedFileSearchAppendix,
+	formatReferencedFileSectionAppendix,
 	formatReferencedFileAppendix,
 	buildReferencedFileToolPolicy,
 	normalizeReferencedFileLookup,
 	parseReferencedFileReadRequest,
+	parseReferencedFileSearchRequest,
+	parseReferencedFileSectionReadRequest,
+	REFERENCED_FILE_SEARCH_TOOL_NAME,
+	REFERENCED_FILE_SECTION_TOOL_NAME,
 	REFERENCED_FILE_TOOL_NAME,
 	type ReferencedFileSummary,
+	type ReferencedFileSearchSummary,
+	type ReferencedFileSectionSummary,
 	type ReferencedFileReadToolResult,
 } from "./referenced-file-tool";
 import { isGeneratedChatBasename } from "./note-title";
@@ -235,6 +247,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					includeMarkdownFileTool: shouldUseMarkdownFileTool,
 					includeReferencedFileTool: shouldUseReferencedFileTool,
 					linkedDocument,
+					preferReferencedFileSearchFirst: Boolean(referencedFileReadState && referencedFileReadState.oversizedPaths.size > 0),
 				}),
 				config.model,
 				requestStatus,
@@ -582,6 +595,9 @@ interface ToolConversationState {
 	fetchCalls: FetchSummary[];
 	hitMaxOutputTokens: boolean;
 	referencedFilesRead: ReferencedFileSummary[];
+	referencedFileSearches: ReferencedFileSearchSummary[];
+	referencedFileSections: ReferencedFileSectionSummary[];
+	markdownWrites: MarkdownWriteSummary[];
 }
 
 interface ToolConversationContinuation {
@@ -635,7 +651,10 @@ async function runToolConversation(
 			didSaveLinkedDocument: false,
 			fetchCalls: [],
 			hitMaxOutputTokens: false,
+			markdownWrites: [],
 			referencedFilesRead: [],
+			referencedFileSearches: [],
+			referencedFileSections: [],
 		},
 		0,
 	);
@@ -731,6 +750,12 @@ async function resumeToolConversation(
 				if (result.status === "success" && options.requireLinkedDocumentSave) {
 					state.didSaveLinkedDocument = true;
 				}
+				if (result.status === "success" && result.path && result.operation) {
+					state.markdownWrites.push({
+						path: result.path,
+						operation: result.operation,
+					});
+				}
 				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
 				continue;
 			}
@@ -749,12 +774,61 @@ async function resumeToolConversation(
 					path: "path" in result ? result.path ?? null : null,
 					truncated: "truncated" in result ? Boolean(result.truncated) : false,
 				});
-				registerReferencedFileResult(app, options.referencedFileReadState, result);
+				registerReferencedFileLikeResult(app, options.referencedFileReadState, result);
 				if (result.status === "success" && result.path) {
 					state.referencedFilesRead.push({
 						path: result.path,
 						truncated: Boolean(result.truncated),
 					});
+				}
+				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
+				continue;
+			}
+
+			if (toolCall.name === REFERENCED_FILE_SEARCH_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
+				requestStatus.notifyToolUse(describeReferencedFileSearchToolCall(toolCall.arguments));
+				const result = await executeReferencedFileSearchToolCall(app, toolCall.arguments, options.referencedFileReadState);
+				logConvoDebug("chat.toolConversation.referencedFileSearchResult", {
+					status: result.status,
+					path: "path" in result ? result.path ?? null : null,
+					matchCount: Array.isArray(result.matches) ? result.matches.length : 0,
+					truncated: Boolean(result.truncated),
+				});
+				if (result.status === "success" && result.path && result.query) {
+					state.referencedFileSearches.push({
+						path: result.path,
+						query: result.query,
+						truncated: Boolean(result.truncated),
+					});
+				}
+				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
+				continue;
+			}
+
+			if (toolCall.name === REFERENCED_FILE_SECTION_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
+				requestStatus.notifyToolUse(describeReferencedFileSectionToolCall(toolCall.arguments));
+				const result = await executeReferencedFileSectionToolCall(app, toolCall.arguments, options.referencedFileReadState);
+				logConvoDebug("chat.toolConversation.referencedFileSectionResult", {
+					status: result.status,
+					path: "path" in result ? result.path ?? null : null,
+					lineStart: "lineStart" in result ? result.lineStart ?? null : null,
+					lineEnd: "lineEnd" in result ? result.lineEnd ?? null : null,
+					sectionHeading: "sectionHeading" in result ? result.sectionHeading ?? null : null,
+				});
+				registerReferencedFileLikeResult(app, options.referencedFileReadState, result);
+				if (result.status === "success" && result.path) {
+					state.referencedFilesRead.push({
+						path: result.path,
+						truncated: Boolean(result.truncated),
+					});
+					if (typeof result.lineStart === "number" && typeof result.lineEnd === "number") {
+						state.referencedFileSections.push({
+							path: result.path,
+							lineStart: result.lineStart,
+							lineEnd: result.lineEnd,
+							sectionHeading: result.sectionHeading,
+						});
+					}
 				}
 				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
 				continue;
@@ -808,7 +882,7 @@ async function resumeToolConversation(
 }
 
 function formatToolConversationAppendix(state: ToolConversationState): string {
-	return `${formatReferencedFileAppendix(state.referencedFilesRead)}${formatFetchAppendix(state.fetchCalls)}`;
+	return `${formatReferencedFileAppendix(state.referencedFilesRead)}${formatReferencedFileSearchAppendix(state.referencedFileSearches)}${formatReferencedFileSectionAppendix(state.referencedFileSections)}${formatMarkdownWriteAppendix(state.markdownWrites)}${formatFetchAppendix(state.fetchCalls)}`;
 }
 
 function formatMcpUsageAppendix(notices: string[]): string {
@@ -884,6 +958,26 @@ function describeReferencedFileToolCall(argumentsJson: string): string {
 	return `Reading referenced file: ${normalizedReference || parsed.data.reference}`;
 }
 
+function describeReferencedFileSearchToolCall(argumentsJson: string): string {
+	const parsed = parseReferencedFileSearchRequest(argumentsJson);
+	if (!parsed.success) {
+		return "Searching referenced file";
+	}
+
+	const normalizedReference = normalizeReferencedFileLookup(parsed.data.reference);
+	return `Searching referenced file: ${normalizedReference || parsed.data.reference} for "${parsed.data.query.trim()}"`;
+}
+
+function describeReferencedFileSectionToolCall(argumentsJson: string): string {
+	const parsed = parseReferencedFileSectionReadRequest(argumentsJson);
+	if (!parsed.success) {
+		return "Reading referenced file section";
+	}
+
+	const normalizedReference = normalizeReferencedFileLookup(parsed.data.reference);
+	return `Reading referenced file section: ${normalizedReference || parsed.data.reference} at line ${parsed.data.line}`;
+}
+
 function withToolPolicies(
 	messages: ChatMessage[],
 	options: {
@@ -891,6 +985,7 @@ function withToolPolicies(
 		includeMarkdownFileTool: boolean;
 		includeReferencedFileTool: boolean;
 		linkedDocument?: LinkedDocumentContext;
+		preferReferencedFileSearchFirst?: boolean;
 	},
 ): ChatMessage[] {
 	const nextMessages = [...messages];
@@ -905,7 +1000,9 @@ function withToolPolicies(
 	if (options.includeReferencedFileTool) {
 		nextMessages.push({
 			role: "system",
-			content: buildReferencedFileToolPolicy(),
+			content: buildReferencedFileToolPolicy({
+				preferSearchFirst: options.preferReferencedFileSearchFirst,
+			}),
 		});
 	}
 
@@ -926,10 +1023,10 @@ function withToolPolicies(
 	return nextMessages;
 }
 
-function registerReferencedFileResult(
+function registerReferencedFileLikeResult(
 	app: App,
 	state: ReferencedFileReadState,
-	result: ReferencedFileReadToolResult,
+	result: ReferencedFileReadToolResult | { content?: string; path?: string; status: string },
 ): void {
 	if (result.status !== "success" || !result.path || typeof result.content !== "string") {
 		return;

@@ -22,6 +22,8 @@ import {
 } from "./markdown-file-tool";
 import {
 	extractFunctionToolCalls,
+	getReferencedFileSearchToolDefinition,
+	getReferencedFileSectionToolDefinition,
 	getReferencedFileToolDefinition,
 } from "./referenced-file-tool";
 import { createOpenAIFetchAdapter } from "./openai-fetch";
@@ -223,6 +225,8 @@ export class OpenAIClient {
 
 		if (params.includeReferencedFileTool) {
 			tools.push(getReferencedFileToolDefinition());
+			tools.push(getReferencedFileSearchToolDefinition());
+			tools.push(getReferencedFileSectionToolDefinition());
 		}
 
 		if (params.messages) {

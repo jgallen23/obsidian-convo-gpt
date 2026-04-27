@@ -24,6 +24,11 @@ export interface MarkdownWriteToolResult {
 	currentContent?: string;
 }
 
+export interface MarkdownWriteSummary {
+	operation: MarkdownWriteOperation;
+	path: string;
+}
+
 const markdownWriteRequestSchema = z
 	.object({
 		path: z.string().min(1),
@@ -122,6 +127,31 @@ export function buildMarkdownFileToolPolicy(): string {
 		"- Only use save_markdown_file when the user explicitly names the markdown target, such as story.md, Stories/story.md, or [[Stories/story]].",
 		"- If the user asks to save but does not provide an explicit markdown path or note reference, ask them where to save it instead of guessing.",
 	].join("\n");
+}
+
+export function formatMarkdownWriteAppendix(writes: MarkdownWriteSummary[]): string {
+	if (writes.length === 0) {
+		return "";
+	}
+
+	const seen = new Set<string>();
+	const lines: string[] = [];
+
+	for (const write of writes) {
+		const key = `${write.operation} ${write.path}`;
+		if (seen.has(key)) {
+			continue;
+		}
+
+		seen.add(key);
+		lines.push(`${lines.length + 1}. ${write.operation} [[${write.path}]]`);
+	}
+
+	if (lines.length === 0) {
+		return "";
+	}
+
+	return `\n\n### Markdown file saves\n${lines.join("\n")}`;
 }
 
 export function getMarkdownFileToolDefinition(): FunctionTool {

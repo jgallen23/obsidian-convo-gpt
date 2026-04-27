@@ -306,6 +306,160 @@ describe("runChatCommand", () => {
 		});
 	});
 
+	it("can search an oversized referenced file before deciding whether to read it", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const briefFile = createFile("Docs/Brief.md", { size: 30000 });
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_search",
+						name: "search_referenced_file",
+						arguments: JSON.stringify({ reference: "Brief", query: "deadline" }),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "The brief mentions a Friday deadline.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const app = buildApp(
+			noteFile,
+			{
+				"Brief|Notes/Chat.md": briefFile,
+			},
+			{
+				"Docs/Brief.md": `${"Overview\n".repeat(2000)}Project deadline is Friday.\nBudget is unchanged.`,
+			},
+		);
+		const editor = createEditor("# _You (1)_\n\nWhat deadline is in [[Brief]]?");
+		const requestStatus = buildRequestStatus();
+
+		await runChatCommand({
+			app: app as never,
+			editor: editor as never,
+			requestStatus,
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		const firstTurn = createTurnMock.mock.calls[0]?.[0];
+		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("prefer search_referenced_file first"))).toBe(
+			true,
+		);
+
+		const secondTurn = createTurnMock.mock.calls[1]?.[0];
+		expect(JSON.parse(secondTurn.inputItems[0].output)).toMatchObject({
+			status: "success",
+			path: "Docs/Brief.md",
+			query: "deadline",
+			matches: [
+				expect.objectContaining({
+					lineStart: expect.any(Number),
+					lineEnd: expect.any(Number),
+					snippet: expect.stringContaining("Project deadline is Friday."),
+				}),
+			],
+		});
+		expect(editor.getValue()).toContain("The brief mentions a Friday deadline.");
+		expect(editor.getValue()).not.toContain("### Referenced files");
+		expect(editor.getValue()).toContain("### Referenced file searches");
+		expect(editor.getValue()).toContain('Searched [[Docs/Brief.md]] for "deadline"');
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith('Searching referenced file: Brief for "deadline"');
+	});
+
+	it("can read a section from a search result line in an oversized referenced file", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const briefFile = createFile("Docs/Brief.md", { size: 30000 });
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_search",
+						name: "search_referenced_file",
+						arguments: JSON.stringify({ reference: "Brief", query: "buyer" }),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_section",
+						name: "read_referenced_file_section",
+						arguments: JSON.stringify({ reference: "Brief", line: 2005 }),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_3",
+				text: "Your typical buyer is a VP of Marketing or Creative Director.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+
+		const app = buildApp(
+			noteFile,
+			{
+				"Brief|Notes/Chat.md": briefFile,
+			},
+			{
+				"Docs/Brief.md": [
+					"# Intro",
+					`${"Overview\n".repeat(2000)}`.trimEnd(),
+					"## Ideal Client Profile",
+					"- Clients are growth-oriented companies.",
+					"- Typical buyer is a VP of Marketing or Creative Director.",
+					"",
+					"## Core Problems",
+					"- The site is rigid.",
+				].join("\n"),
+			},
+		);
+		const editor = createEditor("# _You (1)_\n\nWho is the buyer in [[Brief]]?");
+		const requestStatus = buildRequestStatus();
+
+		await runChatCommand({
+			app: app as never,
+			editor: editor as never,
+			requestStatus,
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		const thirdTurn = createTurnMock.mock.calls[2]?.[0];
+		expect(JSON.parse(thirdTurn.inputItems[0].output)).toMatchObject({
+			status: "success",
+			path: "Docs/Brief.md",
+			sectionHeading: "Ideal Client Profile",
+		});
+		expect(JSON.parse(thirdTurn.inputItems[0].output).content).toContain("Typical buyer is a VP of Marketing");
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith('Searching referenced file: Brief for "buyer"');
+		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Reading referenced file section: Brief at line 2005");
+		expect(editor.getValue()).toContain("Your typical buyer is a VP of Marketing or Creative Director.");
+		expect(editor.getValue()).toContain("### Referenced files");
+		expect(editor.getValue()).toContain("### Referenced file searches");
+		expect(editor.getValue()).toContain('Searched [[Docs/Brief.md]] for "buyer"');
+		expect(editor.getValue()).toContain("### Referenced file sections");
+		expect(editor.getValue()).toContain('Read section "Ideal Client Profile" from [[Docs/Brief.md]]');
+	});
+
 	it("can process read and write tools in the same turn loop", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 		const briefFile = createFile("Docs/Brief.md");
@@ -376,6 +530,8 @@ describe("runChatCommand", () => {
 		expect(executeMarkdownWriteToolCallMock).toHaveBeenCalledTimes(1);
 		expect(editor.getValue()).toContain("### Referenced files");
 		expect(editor.getValue()).toContain("[[Docs/Brief.md]]");
+		expect(editor.getValue()).toContain("### Markdown file saves");
+		expect(editor.getValue()).toContain("append [[Stories/story.md]]");
 		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Reading referenced file: Brief");
 		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Saving markdown file: Stories/story.md");
 	});
@@ -1388,13 +1544,16 @@ function createEditor(initialValue: string) {
 	};
 }
 
-function createFile(path: string): TFile {
+function createFile(path: string, options: { size?: number } = {}): TFile {
 	const file = Object.create(TFile.prototype) as TFile;
 	Object.assign(file, {
 		path,
 		name: path.split("/").at(-1) ?? path,
 		basename: (path.split("/").at(-1) ?? path).replace(/\.[^.]+$/, ""),
 		extension: path.split(".").at(-1) ?? "",
+		stat: {
+			size: options.size ?? 0,
+		},
 	});
 	return file;
 }

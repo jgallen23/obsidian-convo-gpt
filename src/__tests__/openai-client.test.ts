@@ -147,6 +147,34 @@ describe("OpenAI client request metadata", () => {
 		]);
 	});
 
+	it("includes referenced file read and search tools in turn requests", () => {
+		const client = new OpenAIClient(buildConfig());
+		const request = (
+			client as unknown as {
+				buildNonStreamingTurnRequest: (params: { includeReferencedFileTool?: boolean }) => { tools?: Array<Record<string, unknown>> };
+			}
+		).buildNonStreamingTurnRequest({
+			includeReferencedFileTool: true,
+		});
+
+		expect(request.tools).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "read_referenced_file",
+					type: "function",
+				}),
+				expect.objectContaining({
+					name: "search_referenced_file",
+					type: "function",
+				}),
+				expect.objectContaining({
+					name: "read_referenced_file_section",
+					type: "function",
+				}),
+			]),
+		);
+	});
+
 	it("extracts MCP notices from response output items", () => {
 		const client = new OpenAIClient(buildConfig());
 		const completion = (
