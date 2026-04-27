@@ -51,7 +51,13 @@ import {
 import { isGeneratedChatBasename } from "./note-title";
 import { shouldShowTopOfAnswerLink } from "./response-length";
 import { parseSections } from "./message-parser";
-import { createForcedFunctionToolChoice, OpenAIClient, type OpenAICompletion } from "./openai-client";
+import {
+	createForcedFunctionToolChoice,
+	OpenAIClient,
+	type CreateTurnParams,
+	type OpenAICompletion,
+	type OpenAITurn,
+} from "./openai-client";
 import type { RequestStatusManager } from "./request-status";
 import { buildAssistantPrefix, buildAssistantSuffix, getNextExchangeId } from "./response-anchors";
 import { StreamingWriter } from "./streaming-writer";
@@ -210,7 +216,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		requestStatus.setCalling(config.model);
 
 		if (shouldUseFetchTool || shouldUseMarkdownFileTool || shouldUseReferencedFileTool) {
-			const completion = await runToolConversation(
+			const toolResult = await runToolConversation(
 				app,
 				client,
 				withToolPolicies(messages, {
@@ -228,13 +234,102 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					linkedDocument,
 					referencedFileReadState,
 					requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
+					stopBeforePlainAssistantTurn: config.stream,
 				},
 			);
-			completionText = completion.text;
-			sourcesAppendix = completion.sourcesAppendix;
-			completionText = postProcessCompletionText(completionText, linkedDocument);
-			editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
-			writeOffset += completionText.length;
+			if (toolResult.kind === "completion") {
+				completionText = toolResult.completion.text;
+				sourcesAppendix = toolResult.completion.sourcesAppendix;
+				completionText = postProcessCompletionText(completionText, linkedDocument);
+				editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
+				writeOffset += completionText.length;
+			} else {
+				let continuation = toolResult.continuation;
+
+				while (true) {
+					const streamedStartOffset = writeOffset;
+					const writer = new StreamingWriter(editor, editor.offsetToPos(writeOffset));
+					writer.start();
+					let didSetStreamingStatus = false;
+					let streamedText = "";
+					const streamedResponse = await client.streamTurn(
+						{
+							includeFetchTool: shouldUseFetchTool,
+							includeMarkdownFileTool: shouldUseMarkdownFileTool,
+							includeReferencedFileTool: shouldUseReferencedFileTool,
+							inputItems: continuation.inputItems,
+							previousResponseId: continuation.previousResponseId,
+							toolChoice: continuation.toolChoice,
+						},
+						{
+							onSearchStart: () => {
+								requestStatus.notifyToolUse("Using web search");
+								requestStatus.setWebSearch();
+							},
+							onText: (delta) => {
+								if (!didSetStreamingStatus) {
+									requestStatus.setStreaming(config.model);
+									didSetStreamingStatus = true;
+								}
+
+								writer.append(delta);
+								streamedText += delta;
+							},
+						},
+					);
+					writer.stop();
+					writeOffset = editor.posToOffset(writer.getCursor());
+					shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
+
+					if (streamedResponse.toolCalls.length === 0) {
+						completionText = streamedText || streamedResponse.text;
+						const nextCompletionText = postProcessCompletionText(completionText, linkedDocument);
+						if (nextCompletionText !== completionText) {
+							editor.replaceRange(
+								nextCompletionText,
+								editor.offsetToPos(streamedStartOffset),
+								editor.offsetToPos(writeOffset),
+							);
+							writeOffset = streamedStartOffset + nextCompletionText.length;
+						}
+						completionText = nextCompletionText;
+						sourcesAppendix = `${streamedResponse.sourcesAppendix}${formatToolConversationAppendix(continuation.state)}`;
+						break;
+					}
+
+					editor.replaceRange("", editor.offsetToPos(streamedStartOffset), editor.offsetToPos(writeOffset));
+					writeOffset = streamedStartOffset;
+
+					const resumedToolResult = await resumeToolConversation(
+						app,
+						client,
+						streamedResponse,
+						config.model,
+						requestStatus,
+						{
+							includeFetchTool: shouldUseFetchTool,
+							includeMarkdownFileTool: shouldUseMarkdownFileTool,
+							includeReferencedFileTool: shouldUseReferencedFileTool,
+							linkedDocument,
+							referencedFileReadState,
+							requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
+							stopBeforePlainAssistantTurn: true,
+						},
+						continuation.state,
+						continuation.roundsCompleted,
+					);
+
+					if (resumedToolResult.kind === "completion") {
+						completionText = postProcessCompletionText(resumedToolResult.completion.text, linkedDocument);
+						sourcesAppendix = resumedToolResult.completion.sourcesAppendix;
+						editor.replaceRange(completionText, editor.offsetToPos(writeOffset));
+						writeOffset += completionText.length;
+						break;
+					}
+
+					continuation = resumedToolResult.continuation;
+				}
+			}
 		} else if (config.stream) {
 			const writer = new StreamingWriter(editor, editor.offsetToPos(writeOffset));
 			writer.start();
@@ -435,7 +530,32 @@ interface ToolConversationOptions {
 	linkedDocument?: LinkedDocumentContext;
 	referencedFileReadState?: ReferencedFileReadState;
 	requireLinkedDocumentSave?: boolean;
+	stopBeforePlainAssistantTurn?: boolean;
 }
+
+interface ToolConversationState {
+	didSaveLinkedDocument: boolean;
+	fetchCalls: FetchSummary[];
+	referencedFilesRead: ReferencedFileSummary[];
+}
+
+interface ToolConversationContinuation {
+	inputItems: NonNullable<CreateTurnParams["inputItems"]>;
+	previousResponseId: string;
+	roundsCompleted: number;
+	state: ToolConversationState;
+	toolChoice?: CreateTurnParams["toolChoice"];
+}
+
+type ToolConversationResult =
+	| {
+			kind: "completion";
+			completion: OpenAICompletion;
+	  }
+	| {
+			kind: "continue";
+			continuation: ToolConversationContinuation;
+	  };
 
 async function runToolConversation(
 	app: App,
@@ -444,7 +564,7 @@ async function runToolConversation(
 	model: string,
 	requestStatus: RequestStatusManager,
 	options: ToolConversationOptions,
-): Promise<OpenAICompletion> {
+): Promise<ToolConversationResult> {
 	logConvoDebug("chat.toolConversation.start", {
 		includeFetchTool: options.includeFetchTool,
 		includeMarkdownFileTool: options.includeMarkdownFileTool,
@@ -459,20 +579,42 @@ async function runToolConversation(
 		includeReferencedFileTool: options.includeReferencedFileTool,
 		toolChoice: options.requireLinkedDocumentSave ? "required" : undefined,
 	});
-	const fetchCalls: FetchSummary[] = [];
-	const referencedFilesRead: ReferencedFileSummary[] = [];
-	let didSaveLinkedDocument = false;
+	return resumeToolConversation(
+		app,
+		client,
+		response,
+		model,
+		requestStatus,
+		options,
+		{
+			didSaveLinkedDocument: false,
+			fetchCalls: [],
+			referencedFilesRead: [],
+		},
+		0,
+	);
+}
 
-	for (let round = 0; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
+async function resumeToolConversation(
+	app: App,
+	client: OpenAIClient,
+	response: OpenAITurn,
+	model: string,
+	requestStatus: RequestStatusManager,
+	options: ToolConversationOptions,
+	state: ToolConversationState,
+	startingRound: number,
+): Promise<ToolConversationResult> {
+	for (let round = startingRound; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
 		logConvoDebug("chat.toolConversation.round", {
 			round: round + 1,
 			responseId: response.responseId,
 			toolCallNames: response.toolCalls.map((toolCall) => toolCall.name),
-			didSaveLinkedDocument,
+			didSaveLinkedDocument: state.didSaveLinkedDocument,
 		});
 
 		if (response.toolCalls.length === 0) {
-			if (options.requireLinkedDocumentSave && !didSaveLinkedDocument) {
+			if (options.requireLinkedDocumentSave && !state.didSaveLinkedDocument) {
 				logConvoDebug("chat.toolConversation.missingLinkedDocumentSave", {
 					responseId: response.responseId,
 					textLength: response.text.length,
@@ -481,12 +623,15 @@ async function runToolConversation(
 			}
 
 			return {
-				text: response.text,
-				sourcesAppendix: `${response.sourcesAppendix}${formatReferencedFileAppendix(referencedFilesRead)}${formatFetchAppendix(fetchCalls)}`,
+				kind: "completion",
+				completion: {
+					text: response.text,
+					sourcesAppendix: `${response.sourcesAppendix}${formatToolConversationAppendix(state)}`,
+				},
 			};
 		}
 
-		const toolOutputs = [];
+		const toolOutputs: NonNullable<CreateTurnParams["inputItems"]> = [];
 		for (const toolCall of response.toolCalls) {
 			if (toolCall.name === FETCH_TOOL_NAME && options.includeFetchTool) {
 				requestStatus.notifyToolUse(describeFetchToolCall(toolCall.arguments));
@@ -498,7 +643,7 @@ async function runToolConversation(
 					statusCode: "statusCode" in result ? result.statusCode ?? null : null,
 				});
 				if (result.status === "success" && result.method && result.statusCode && (result.finalUrl || result.url)) {
-					fetchCalls.push({
+					state.fetchCalls.push({
 						method: result.method,
 						statusCode: result.statusCode,
 						truncated: Boolean(result.truncated),
@@ -532,7 +677,7 @@ async function runToolConversation(
 					message: "message" in result ? result.message : null,
 				});
 				if (result.status === "success" && options.requireLinkedDocumentSave) {
-					didSaveLinkedDocument = true;
+					state.didSaveLinkedDocument = true;
 				}
 				toolOutputs.push(buildFunctionCallOutput(toolCall.call_id, result));
 				continue;
@@ -548,7 +693,7 @@ async function runToolConversation(
 				});
 				registerReferencedFileResult(app, options.referencedFileReadState, result);
 				if (result.status === "success" && result.path) {
-					referencedFilesRead.push({
+					state.referencedFilesRead.push({
 						path: result.path,
 						truncated: Boolean(result.truncated),
 					});
@@ -567,9 +712,21 @@ async function runToolConversation(
 
 		requestStatus.setCalling(model);
 		const nextToolChoice =
-			options.requireLinkedDocumentSave && !didSaveLinkedDocument
+			options.requireLinkedDocumentSave && !state.didSaveLinkedDocument
 				? createForcedFunctionToolChoice(MARKDOWN_FILE_TOOL_NAME)
 				: undefined;
+		if (options.stopBeforePlainAssistantTurn && nextToolChoice === undefined) {
+			return {
+				kind: "continue",
+				continuation: {
+					inputItems: toolOutputs,
+					previousResponseId: response.responseId,
+					roundsCompleted: round + 1,
+					state,
+					toolChoice: nextToolChoice,
+				},
+			};
+		}
 		logConvoDebug("chat.toolConversation.nextTurn", {
 			previousResponseId: response.responseId,
 			toolOutputCount: toolOutputs.length,
@@ -590,6 +747,10 @@ async function runToolConversation(
 		requireLinkedDocumentSave: options.requireLinkedDocumentSave ?? false,
 	});
 	throw new Error("Convo GPT exceeded the markdown file tool round limit.");
+}
+
+function formatToolConversationAppendix(state: ToolConversationState): string {
+	return `${formatReferencedFileAppendix(state.referencedFilesRead)}${formatFetchAppendix(state.fetchCalls)}`;
 }
 
 function describeFetchToolCall(argumentsJson: string): string {

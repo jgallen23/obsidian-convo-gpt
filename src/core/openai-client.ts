@@ -51,7 +51,7 @@ export interface CreateTurnParams {
 	inputItems?: ResponseInputItem[];
 	messages?: ChatMessage[];
 	previousResponseId?: string;
-	toolChoice?: ResponseCreateParamsNonStreaming["tool_choice"];
+	toolChoice?: ResponseCreateParamsBase["tool_choice"];
 }
 
 export interface StreamCallbacks {
@@ -98,8 +98,33 @@ export class OpenAIClient {
 		return parsed;
 	}
 
+	async streamTurn(params: CreateTurnParams, callbacks: StreamCallbacks): Promise<OpenAITurn> {
+		const stream = this.client.responses.stream(this.buildStreamingTurnRequest(params));
+		let fullText = "";
+
+		for await (const event of stream) {
+			if (event.type === "response.web_search_call.searching") {
+				callbacks.onSearchStart?.();
+			}
+
+			if (event.type === "response.output_text.delta") {
+				fullText += event.delta;
+				callbacks.onText(event.delta);
+			}
+		}
+
+		const finalResponse = await stream.finalResponse();
+		const toolCalls = extractFunctionToolCalls(finalResponse);
+		return {
+			responseId: finalResponse.id,
+			text: fullText || extractText(finalResponse),
+			sourcesAppendix: formatWebSearchSources(extractResponseSources(finalResponse)),
+			toolCalls,
+		};
+	}
+
 	async createTurn(params: CreateTurnParams): Promise<OpenAITurn> {
-		const request = this.buildTurnRequest(params);
+		const request = this.buildNonStreamingTurnRequest(params);
 		logConvoDebug("openai.createTurn.request", {
 			model: request.model,
 			toolChoice: params.toolChoice ?? null,
@@ -154,7 +179,7 @@ export class OpenAIClient {
 		return request;
 	}
 
-	private buildTurnRequest(params: CreateTurnParams): ResponseCreateParamsNonStreaming {
+	private buildTurnRequestBase(params: CreateTurnParams): ResponseCreateParamsBase {
 		const normalizedModel = normalizeModelId(this.config.model);
 		const tools: NonNullable<ResponseCreateParamsBase["tools"]> = [];
 
@@ -196,7 +221,6 @@ export class OpenAIClient {
 				tools: tools.length > 0 ? tools : undefined,
 				tool_choice: params.toolChoice,
 				parallel_tool_calls: false,
-				stream: false,
 			};
 		}
 
@@ -210,7 +234,20 @@ export class OpenAIClient {
 			tools: tools.length > 0 ? tools : undefined,
 			tool_choice: params.toolChoice,
 			parallel_tool_calls: false,
+		};
+	}
+
+	private buildNonStreamingTurnRequest(params: CreateTurnParams): ResponseCreateParamsNonStreaming {
+		return {
+			...this.buildTurnRequestBase(params),
 			stream: false,
+		};
+	}
+
+	private buildStreamingTurnRequest(params: CreateTurnParams): ResponseCreateParamsStreaming {
+		return {
+			...this.buildTurnRequestBase(params),
+			stream: true,
 		};
 	}
 

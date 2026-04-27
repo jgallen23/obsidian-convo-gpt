@@ -68,6 +68,7 @@ const {
 	createTurnMock,
 	createMock,
 	streamMock,
+	streamTurnMock,
 } = vi.hoisted(() => ({
 	resolveAgentMock: vi.fn<() => Promise<AgentDefinition | null>>(),
 	executeFetchToolCallMock: vi.fn(),
@@ -75,6 +76,7 @@ const {
 	createTurnMock: vi.fn(),
 	createMock: vi.fn(),
 	streamMock: vi.fn(),
+	streamTurnMock: vi.fn(),
 }));
 
 vi.mock("../core/agent-resolver", () => ({
@@ -114,6 +116,10 @@ vi.mock("../core/openai-client", () => ({
 		async stream(...args: unknown[]) {
 			return streamMock(args[0], args[1]);
 		}
+
+		async streamTurn(...args: unknown[]) {
+			return streamTurnMock(args[0], args[1]);
+		}
 	},
 }));
 
@@ -144,6 +150,14 @@ describe("runChatCommand", () => {
 		createTurnMock.mockReset();
 		createMock.mockReset();
 		streamMock.mockReset();
+		streamTurnMock.mockReset();
+		streamTurnMock.mockImplementation(async (params: unknown, callbacks: { onText?: (delta: string) => void }) => {
+			const response = await createTurnMock(params);
+			if (typeof response?.text === "string" && response.text.length > 0) {
+				callbacks.onText?.(response.text);
+			}
+			return response;
+		});
 	});
 
 	it("lets the model read files linked only from the active agent prompt", async () => {
@@ -866,6 +880,136 @@ Update the proposal using [[Brief]].`);
 		expect(requestStatus.notifyToolUse).toHaveBeenCalledWith("Using fetch: GET https://api.example.com/users");
 	});
 
+	it("streams the final assistant phase after tool calls complete", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const briefFile = createFile("Docs/Brief.md");
+		createTurnMock.mockResolvedValueOnce({
+			responseId: "resp_1",
+			text: "",
+			sourcesAppendix: "",
+			toolCalls: [
+				{
+					type: "function_call",
+					call_id: "call_read",
+					name: "read_referenced_file",
+					arguments: JSON.stringify({ reference: "Brief" }),
+				},
+			],
+		});
+		streamTurnMock.mockImplementationOnce(async (params: unknown, callbacks: { onText?: (delta: string) => void }) => {
+			callbacks.onText?.("Final streamed answer.");
+			return {
+				responseId: "resp_2",
+				text: "Final streamed answer.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			};
+		});
+
+		const editor = createEditor("# _You (1)_\n\nRead [[Brief]] and then answer.");
+		const requestStatus = buildRequestStatus();
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"Brief|Notes/Chat.md": briefFile,
+				},
+				{
+					"Docs/Brief.md": "Short brief.",
+				},
+			) as never,
+			editor: editor as never,
+			requestStatus,
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(streamTurnMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				inputItems: [
+					expect.objectContaining({
+						type: "function_call_output",
+						call_id: "call_read",
+					}),
+				],
+				previousResponseId: "resp_1",
+			}),
+			expect.anything(),
+		);
+		expect(requestStatus.setStreaming).toHaveBeenCalledWith("openai@gpt-5.4");
+		expect(editor.getValue()).toContain("Final streamed answer.");
+		expect(editor.getValue()).toContain("### Referenced files");
+	});
+
+	it("falls back to non-streaming tool continuation when streamed follow-up asks for another tool", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const briefFile = createFile("Docs/Brief.md");
+		const nestedFile = createFile("Docs/Nested.md");
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_read",
+						name: "read_referenced_file",
+						arguments: JSON.stringify({ reference: "Brief" }),
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_3",
+				text: "Finished after fallback.",
+				sourcesAppendix: "",
+				toolCalls: [],
+			});
+		streamTurnMock.mockImplementationOnce(async (params: unknown, callbacks: { onText?: (delta: string) => void }) => {
+			callbacks.onText?.("Transient text that should be removed.");
+			return {
+				responseId: "resp_2",
+				text: "Transient text that should be removed.",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_nested",
+						name: "read_referenced_file",
+						arguments: JSON.stringify({ reference: "Nested" }),
+					},
+				],
+			};
+		});
+
+		const editor = createEditor("# _You (1)_\n\nRead [[Brief]] and then answer.");
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"Brief|Notes/Chat.md": briefFile,
+					"Nested|Docs/Brief.md": nestedFile,
+				},
+				{
+					"Docs/Brief.md": "Short brief. See [[Nested]].",
+					"Docs/Nested.md": "Nested brief.",
+				},
+			) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		expect(editor.getValue()).toContain("Finished after fallback.");
+		expect(editor.getValue()).not.toContain("Transient text that should be removed.");
+		expect(editor.getValue()).toContain("### Referenced files");
+		expect(editor.getValue()).toContain("[[Docs/Nested.md]]");
+	});
+
 	it("shows a notice when web search starts without writing inline status text", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 		const requestStatus = buildRequestStatus();
@@ -1043,6 +1187,7 @@ function createEditor(initialValue: string) {
 
 	return {
 		getValue: () => value,
+		getScrollInfo: () => ({ top: 0 }),
 		offsetToPos: (offset: number) => ({ line: 0, ch: offset }),
 		posToOffset: (pos: { ch: number }) => pos.ch,
 		replaceRange: (text: string, start: { ch: number }, end?: { ch: number }) => {
@@ -1050,6 +1195,7 @@ function createEditor(initialValue: string) {
 			const to = end?.ch ?? from;
 			value = `${value.slice(0, from)}${text}${value.slice(to)}`;
 		},
+		scrollIntoView: vi.fn(),
 		setCursor: vi.fn(),
 		setValue: (nextValue: string) => {
 			value = nextValue;
