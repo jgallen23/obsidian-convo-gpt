@@ -68,6 +68,72 @@ describe("OpenAI client request metadata", () => {
 		expect(request).not.toHaveProperty("temperature");
 	});
 
+	it("omits reasoning from requests when reasoning_effort is none", () => {
+		const client = new OpenAIClient(buildConfig({ reasoning_effort: "none" }));
+		const request = (
+			client as unknown as {
+				buildNonStreamingRequest: (messages: Array<{ role: string; content: string }>) => Record<string, unknown>;
+			}
+		).buildNonStreamingRequest([{ role: "user", content: "Hello" }]);
+
+		expect(request).not.toHaveProperty("reasoning");
+	});
+
+	it("includes reasoning in requests when reasoning_effort is set", () => {
+		const client = new OpenAIClient(buildConfig({ reasoning_effort: "high" }));
+		const request = (
+			client as unknown as {
+				buildNonStreamingTurnRequest: (params: { includeFetchTool?: boolean }) => Record<string, unknown>;
+			}
+		).buildNonStreamingTurnRequest({});
+
+		expect(request).toHaveProperty("reasoning");
+		expect(request.reasoning).toEqual({ effort: "high" });
+	});
+
+	it("can include reasoning while omitting temperature", () => {
+		const client = new OpenAIClient(buildConfig({ reasoning_effort: "high", temperature: undefined }));
+		const request = (
+			client as unknown as {
+				buildNonStreamingRequest: (messages: Array<{ role: string; content: string }>) => Record<string, unknown>;
+			}
+		).buildNonStreamingRequest([{ role: "user", content: "Hello" }]);
+
+		expect(request.reasoning).toEqual({ effort: "high" });
+		expect(request).not.toHaveProperty("temperature");
+	});
+
+	it("logs request debug details for non-streaming requests", async () => {
+		const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		setConvoDebugLoggingEnabled(true);
+		const client = new OpenAIClient(buildConfig({ reasoning_effort: "high", temperature: 0.3, max_tokens: 9000 }));
+		(client as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }).client.responses.create = vi.fn(async () => ({
+			id: "resp_1",
+			output_text: "Hello",
+		}));
+
+		await client.create([{ role: "user", content: "Hello" }]);
+
+		expect(consoleInfo).toHaveBeenCalledWith(
+			"[Convo GPT debug]",
+			"openai.create.request",
+			expect.objectContaining({
+				requestKeys: expect.arrayContaining(["input", "max_output_tokens", "metadata", "model", "reasoning", "stream", "temperature"]),
+				model: "gpt-5.4",
+				baseUrl: "https://api.openai.com/v1",
+				stream: false,
+				temperature: 0.3,
+				reasoningEffort: "high",
+				maxOutputTokens: 9000,
+				messageCount: 1,
+				inputMode: "messages",
+				metadata: {
+					"obsidian-convo": "0.1.0",
+				},
+			}),
+		);
+	});
+
 	it("includes enabled MCP servers in base requests", () => {
 		const client = new OpenAIClient(
 			buildConfig({
@@ -265,6 +331,83 @@ describe("OpenAI client request metadata", () => {
 		});
 	});
 
+	it("logs request debug details for streamed tool turns", async () => {
+		const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		setConvoDebugLoggingEnabled(true);
+		const client = new OpenAIClient(
+			buildConfig({
+				reasoning_effort: "medium",
+				temperature: undefined,
+				enableMcpServers: true,
+				mcpServers: [
+					{
+						id: "weather",
+						enabled: true,
+						serverLabel: "weather",
+						serverUrl: "https://example.com/mcp",
+						headers: { Authorization: "Bearer token" },
+						allowedToolNames: ["get_forecast"],
+					},
+				],
+			}),
+		);
+		const fakeStream = {
+			async *[Symbol.asyncIterator]() {},
+			finalResponse: async () => ({
+				id: "resp_2",
+				output: [],
+			}),
+		};
+		(client as unknown as { client: { responses: { stream: ReturnType<typeof vi.fn> } } }).client.responses.stream = vi.fn(() => fakeStream);
+
+		await client.streamTurn(
+			{
+				inputItems: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }] }] as never,
+				previousResponseId: "resp_prev",
+				includeReferencedFileTool: true,
+			},
+			{
+				onText: vi.fn(),
+			},
+		);
+
+		expect(consoleInfo).toHaveBeenCalledWith(
+			"[Convo GPT debug]",
+			"openai.streamTurn.request",
+			expect.objectContaining({
+				requestKeys: expect.arrayContaining([
+					"input",
+					"max_output_tokens",
+					"metadata",
+					"model",
+					"parallel_tool_calls",
+					"previous_response_id",
+					"reasoning",
+					"stream",
+					"tool_choice",
+					"tools",
+				]),
+				model: "gpt-5.4",
+				baseUrl: "https://api.openai.com/v1",
+				stream: true,
+				temperature: null,
+				reasoningEffort: "medium",
+				previousResponseId: "resp_prev",
+				inputMode: "input_items",
+				inputItemCount: 1,
+				toolTypes: expect.arrayContaining(["web_search_preview", "mcp", "function", "function", "function"]),
+				toolNames: expect.arrayContaining([
+					"web_search_preview",
+					"mcp:weather",
+					"read_referenced_file",
+					"search_referenced_file",
+					"read_referenced_file_section",
+				]),
+				mcpServerLabels: ["weather"],
+			}),
+		);
+	});
+
 	it("captures MCP tool usage from output_item.done stream events", async () => {
 		const client = new OpenAIClient(buildConfig());
 		const onToolUse = vi.fn();
@@ -317,6 +460,7 @@ function buildConfig(overrides: Partial<ResolvedChatConfig> = {}): ResolvedChatC
 		apiKey: "test-key",
 		baseUrl: "https://api.openai.com/v1",
 		model: "openai@gpt-5.4",
+		reasoning_effort: "none",
 		temperature: 0.2,
 		max_tokens: 4096,
 		stream: true,

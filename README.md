@@ -67,6 +67,7 @@ Example chat note:
 agent: writing-coach
 document: [[Drafts/Proposal]]
 model: openai@gpt-5.4
+reasoning_effort: low
 mcp_servers:
   - weather
 ---
@@ -81,6 +82,7 @@ Example agent file at `Agents/writing-coach.md`:
 ```md
 ---
 model: openai@gpt-5.4
+reasoning_effort: high
 temperature: 0.4
 max_tokens: 3000
 openai_native_web_search: false
@@ -100,7 +102,7 @@ How agent resolution works:
 - The plugin looks only in the configured `Agent folder`.
 - The file match is basename-based, so `agent: writing-coach` matches `writing-coach.md`.
 - The agent file body becomes a system prompt.
-- Supported agent frontmatter overrides are `model`, `temperature`, `max_tokens`, `stream`, `system_commands`, `mcp_servers`, `baseUrl`, and `openai_native_web_search`.
+- Supported agent frontmatter overrides are `model`, `reasoning_effort`, `temperature`, `max_tokens`, `stream`, `system_commands`, `mcp_servers`, `baseUrl`, and `openai_native_web_search`.
 
 ## Linked documents
 
@@ -211,6 +213,7 @@ Notable plugin settings:
 
 - `Agent folder`: folder used to resolve markdown-based agents by basename.
 - `Chats folder`: folder used by the `New Chat` command. Blank means the vault root.
+- `Default reasoning effort`: `none`, `low`, `medium`, or `high`. `none` omits the Responses API `reasoning` field.
 - `Enable OpenAI native web search`: enables provider-native `web_search` when the selected model supports it.
 - `Enable fetch tool`: allows the model to make outbound HTTP or HTTPS requests for explicit URLs.
 - `Enable markdown file save tool`: allows the model to request markdown file writes with approval.

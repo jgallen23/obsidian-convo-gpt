@@ -58,6 +58,23 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Default reasoning effort")
+			.setDesc("Used when a note or agent does not override reasoning_effort. Use none to omit reasoning entirely.")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("none", "none")
+					.addOption("low", "low")
+					.addOption("medium", "medium")
+					.addOption("high", "high")
+					.setValue(this.plugin.settings.defaultReasoningEffort)
+					.onChange(async (value) => {
+						if (value === "none" || value === "low" || value === "medium" || value === "high") {
+							await this.plugin.updateSettings({ defaultReasoningEffort: value });
+						}
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName("Default temperature")
 			.setDesc("Used when a note or agent does not override temperature. Leave blank to omit temperature entirely.")
 			.addText((text) =>

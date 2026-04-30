@@ -14,6 +14,7 @@ describe("frontmatter helpers", () => {
 	it("parses note overrides and strips the frontmatter from the body", () => {
 		const text = `---
 model: openai@gpt-5.4
+reasoning_effort: medium
 temperature: 0.4
 document: "[[Drafts/Proposal]]"
 system_commands:
@@ -25,6 +26,7 @@ Hello`;
 
 		const parsed = parseNoteDocument(text);
 		expect(parsed.overrides.model).toBe("openai@gpt-5.4");
+		expect(parsed.overrides.reasoning_effort).toBe("medium");
 		expect(parsed.overrides.temperature).toBe(0.4);
 		expect(parsed.overrides.document).toBe("[[Drafts/Proposal]]");
 		expect(parsed.overrides.system_commands).toEqual(["Be concise"]);
@@ -34,6 +36,23 @@ Hello`;
 
 	it("coerces string system commands to arrays", () => {
 		expect(parseNoteOverrides({ system_commands: "Test" }).system_commands).toEqual(["Test"]);
+	});
+
+	it("parses reasoning_effort and ignores invalid values", () => {
+		expect(parseNoteOverrides({ reasoning_effort: "HIGH" }).reasoning_effort).toBe("high");
+		expect(parseNoteOverrides({ reasoning_effort: "fast" }).reasoning_effort).toBeUndefined();
+	});
+
+	it("treats blank note temperature as an explicit unset without dropping sibling overrides", () => {
+		expect(
+			parseNoteOverrides({
+				reasoning_effort: "high",
+				temperature: null,
+			}),
+		).toMatchObject({
+			reasoning_effort: "high",
+			temperature: null,
+		});
 	});
 
 	it("coerces numeric frontmatter overrides from strings", () => {
@@ -61,6 +80,7 @@ Hello`;
 	it("sanitizes settings with defaults", () => {
 		const settings = sanitizeSettings({});
 		expect(settings.defaultModel).toBe(DEFAULT_MODEL);
+		expect(settings.defaultReasoningEffort).toBe("none");
 		expect(settings.defaultTemperature).toBeUndefined();
 		expect(settings.enableOpenAINativeWebSearch).toBe(true);
 		expect(settings.enableFetchTool).toBe(true);
@@ -79,6 +99,11 @@ Hello`;
 	it("preserves an explicitly unset default temperature", () => {
 		const settings = sanitizeSettings({ defaultTemperature: undefined });
 		expect(settings.defaultTemperature).toBeUndefined();
+	});
+
+	it("normalizes default reasoning effort and falls back to none on invalid values", () => {
+		expect(sanitizeSettings({ defaultReasoningEffort: "HIGH" }).defaultReasoningEffort).toBe("high");
+		expect(sanitizeSettings({ defaultReasoningEffort: "fast" }).defaultReasoningEffort).toBe("none");
 	});
 
 	it("strips frontmatter from content", () => {

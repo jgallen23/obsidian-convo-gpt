@@ -168,6 +168,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		apiKey: "test-key",
 		baseUrl: "https://api.openai.com/v1",
 		defaultModel: "openai@gpt-5.4",
+		defaultReasoningEffort: "none",
 		defaultTemperature: 0.2,
 		defaultMaxTokens: 4096,
 		stream: true,

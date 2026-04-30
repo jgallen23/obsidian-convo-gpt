@@ -18,7 +18,13 @@ export function resolveChatConfig(
 		apiKey: settings.apiKey,
 		baseUrl: noteOverrides.baseUrl || agentOverrides?.baseUrl || settings.baseUrl,
 		model: noteOverrides.model || agentOverrides?.model || settings.defaultModel,
-		temperature: noteOverrides.temperature ?? agentOverrides?.temperature ?? settings.defaultTemperature,
+		reasoning_effort:
+			noteOverrides.reasoning_effort ?? agentOverrides?.reasoning_effort ?? settings.defaultReasoningEffort,
+		temperature: resolveTemperatureOverride(
+			noteOverrides.temperature,
+			agentOverrides?.temperature,
+			settings.defaultTemperature,
+		),
 		max_tokens: noteOverrides.max_tokens ?? agentOverrides?.max_tokens ?? settings.defaultMaxTokens,
 		stream: noteOverrides.stream ?? agentOverrides?.stream ?? settings.stream,
 		agent: noteOverrides.agent || agentOverrides?.agent,
@@ -36,6 +42,22 @@ export function resolveChatConfig(
 		enableMcpServers: settings.enableMcpServers && selectedMcpServers.length > 0,
 		mcpServers: selectedMcpServers,
 	};
+}
+
+function resolveTemperatureOverride(
+	noteTemperature: NoteOverrides["temperature"],
+	agentTemperature: NoteOverrides["temperature"],
+	defaultTemperature: PluginSettings["defaultTemperature"],
+): number | undefined {
+	if (noteTemperature !== undefined) {
+		return noteTemperature ?? undefined;
+	}
+
+	if (agentTemperature !== undefined) {
+		return agentTemperature ?? undefined;
+	}
+
+	return defaultTemperature;
 }
 
 function resolveSelectedMcpServers(availableServers: McpServerConfig[], selectedNames: string[] | undefined): McpServerConfig[] {

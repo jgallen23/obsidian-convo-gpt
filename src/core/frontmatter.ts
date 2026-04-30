@@ -1,7 +1,7 @@
 import matter from "gray-matter";
 import { z } from "zod";
 import { DEFAULT_MODEL, DEFAULT_REFERENCED_FILE_EXTENSIONS, DEFAULT_REFERENCED_FILE_MAX_CHARS, DEFAULT_SYSTEM_PROMPT } from "./constants";
-import type { McpServerConfig, NoteOverrides, ParsedNoteDocument, PluginSettings } from "./types";
+import type { McpServerConfig, NoteOverrides, ParsedNoteDocument, PluginSettings, ReasoningEffort } from "./types";
 
 const booleanSchema = z.preprocess((value) => {
 	if (typeof value === "string") {
@@ -29,6 +29,24 @@ const finiteNumberSchema = z.preprocess((value) => {
 
 	return value;
 }, z.number().finite());
+
+const optionalFrontmatterTemperatureSchema = z.preprocess((value) => {
+	if (value === null) {
+		return null;
+	}
+
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return null;
+		}
+
+		const parsed = Number(trimmed);
+		return Number.isFinite(parsed) ? parsed : value;
+	}
+
+	return value;
+}, z.number().finite().nullable().optional());
 
 const positiveIntSchema = z.preprocess((value) => {
 	if (typeof value === "string") {
@@ -81,10 +99,35 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
 	return value;
 }, z.string().min(1).optional());
 
+const reasoningEffortValues = ["none", "low", "medium", "high"] as const;
+
+const optionalReasoningEffortSchema = z.preprocess((value) => {
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		return reasoningEffortValues.includes(normalized as ReasoningEffort) ? normalized : undefined;
+	}
+
+	if (value === null || value === undefined) {
+		return undefined;
+	}
+
+	return undefined;
+}, z.enum(reasoningEffortValues).optional());
+
+const reasoningEffortSchema = z.preprocess((value) => {
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		return reasoningEffortValues.includes(normalized as ReasoningEffort) ? normalized : undefined;
+	}
+
+	return undefined;
+}, z.enum(reasoningEffortValues).default("none"));
+
 const noteOverridesSchema = z
 	.object({
 		model: optionalTrimmedStringSchema,
-		temperature: finiteNumberSchema.optional(),
+		reasoning_effort: optionalReasoningEffortSchema,
+		temperature: optionalFrontmatterTemperatureSchema,
 		max_tokens: positiveIntSchema.optional(),
 		stream: booleanSchema.optional(),
 		agent: optionalTrimmedStringSchema,
@@ -100,6 +143,7 @@ const settingsSchema = z.object({
 	apiKey: z.string().default(""),
 	baseUrl: z.string().url().default("https://api.openai.com/v1"),
 	defaultModel: z.string().min(1).default(DEFAULT_MODEL),
+	defaultReasoningEffort: reasoningEffortSchema,
 	defaultTemperature: finiteNumberSchema.optional(),
 	defaultMaxTokens: positiveIntSchema.default(4096),
 	stream: z.boolean().default(true),

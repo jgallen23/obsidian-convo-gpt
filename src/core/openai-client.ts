@@ -81,12 +81,24 @@ export class OpenAIClient {
 	}
 
 	async create(messages: ChatMessage[]): Promise<OpenAICompletion> {
-		const response = await this.client.responses.create(this.buildNonStreamingRequest(messages));
+		const request = this.buildNonStreamingRequest(messages);
+		logConvoDebug("openai.create.request", summarizeRequestForDebug(request, {
+			apiBaseUrl: this.config.baseUrl,
+			messageCount: messages.length,
+			inputMode: "messages",
+		}));
+		const response = await this.client.responses.create(request);
 		return this.parseCompletion(response);
 	}
 
 	async stream(messages: ChatMessage[], callbacks: StreamCallbacks): Promise<OpenAICompletion> {
-		const stream = this.client.responses.stream(this.buildStreamingRequest(messages));
+		const request = this.buildStreamingRequest(messages);
+		logConvoDebug("openai.stream.request", summarizeRequestForDebug(request, {
+			apiBaseUrl: this.config.baseUrl,
+			messageCount: messages.length,
+			inputMode: "messages",
+		}));
+		const stream = this.client.responses.stream(request);
 		let fullText = "";
 		const emittedMcpNoticeKeys = new Set<string>();
 
@@ -111,7 +123,14 @@ export class OpenAIClient {
 	}
 
 	async streamTurn(params: CreateTurnParams, callbacks: StreamCallbacks): Promise<OpenAITurn> {
-		const stream = this.client.responses.stream(this.buildStreamingTurnRequest(params));
+		const request = this.buildStreamingTurnRequest(params);
+		logConvoDebug("openai.streamTurn.request", summarizeRequestForDebug(request, {
+			apiBaseUrl: this.config.baseUrl,
+			messageCount: params.messages?.length ?? null,
+			inputItemCount: params.inputItems?.length ?? 0,
+			inputMode: params.messages ? "messages" : "input_items",
+		}));
+		const stream = this.client.responses.stream(request);
 		let fullText = "";
 		const emittedMcpNoticeKeys = new Set<string>();
 
@@ -151,14 +170,12 @@ export class OpenAIClient {
 
 	async createTurn(params: CreateTurnParams): Promise<OpenAITurn> {
 		const request = this.buildNonStreamingTurnRequest(params);
-		logConvoDebug("openai.createTurn.request", {
-			model: request.model,
-			toolChoice: params.toolChoice ?? null,
-			toolNames: request.tools?.map((tool) => ("name" in tool ? tool.name : tool.type)) ?? [],
+		logConvoDebug("openai.createTurn.request", summarizeRequestForDebug(request, {
+			apiBaseUrl: this.config.baseUrl,
 			messageCount: params.messages?.length ?? null,
 			inputItemCount: params.inputItems?.length ?? 0,
-			hasPreviousResponseId: Boolean(params.previousResponseId),
-		});
+			inputMode: params.messages ? "messages" : "input_items",
+		}));
 		const response = await this.client.responses.create(request);
 		const toolCalls = extractFunctionToolCalls(response);
 		const mcpActivities = extractMcpActivities(response);
@@ -200,6 +217,13 @@ export class OpenAIClient {
 			instructions: systemMessages.map((message) => message.content).join("\n\n") || undefined,
 			metadata: OPENAI_REQUEST_METADATA,
 			max_output_tokens: this.config.max_tokens,
+			...(this.config.reasoning_effort !== "none"
+				? {
+						reasoning: {
+							effort: this.config.reasoning_effort,
+						},
+					}
+				: {}),
 			...(this.config.temperature !== undefined ? { temperature: this.config.temperature } : {}),
 		};
 
@@ -244,6 +268,13 @@ export class OpenAIClient {
 				instructions: systemMessages.map((message) => message.content).join("\n\n") || undefined,
 				metadata: OPENAI_REQUEST_METADATA,
 				max_output_tokens: this.config.max_tokens,
+				...(this.config.reasoning_effort !== "none"
+					? {
+							reasoning: {
+								effort: this.config.reasoning_effort,
+							},
+						}
+					: {}),
 				tools: tools.length > 0 ? tools : undefined,
 				tool_choice: params.toolChoice,
 				parallel_tool_calls: false,
@@ -257,6 +288,13 @@ export class OpenAIClient {
 			metadata: OPENAI_REQUEST_METADATA,
 			previous_response_id: params.previousResponseId,
 			max_output_tokens: this.config.max_tokens,
+			...(this.config.reasoning_effort !== "none"
+				? {
+						reasoning: {
+							effort: this.config.reasoning_effort,
+						},
+					}
+				: {}),
 			tools: tools.length > 0 ? tools : undefined,
 			tool_choice: params.toolChoice,
 			parallel_tool_calls: false,
@@ -454,6 +492,55 @@ function buildFallbackMcpActivityKey(itemRecord: Record<string, unknown>): strin
 	const serverLabel = typeof itemRecord.server_label === "string" ? itemRecord.server_label : "unknown-server";
 	const toolName = typeof itemRecord.name === "string" ? itemRecord.name : "unknown-tool";
 	return `${type}:${serverLabel}:${toolName}`;
+}
+
+interface RequestDebugExtras {
+	apiBaseUrl: string;
+	inputItemCount?: number | null;
+	inputMode: "messages" | "input_items";
+	messageCount?: number | null;
+}
+
+function summarizeRequestForDebug(
+	request: ResponseCreateParamsNonStreaming | ResponseCreateParamsStreaming,
+	extras: RequestDebugExtras,
+): Record<string, unknown> {
+	const tools = Array.isArray(request.tools) ? request.tools : [];
+	return {
+		requestKeys: Object.keys(request).sort(),
+		model: request.model,
+		baseUrl: extras.apiBaseUrl,
+		stream: request.stream,
+		temperature: "temperature" in request ? request.temperature ?? null : null,
+		reasoningEffort: request.reasoning?.effort ?? null,
+		maxOutputTokens: request.max_output_tokens ?? null,
+		toolChoice: request.tool_choice ?? null,
+		parallelToolCalls: request.parallel_tool_calls ?? null,
+		previousResponseId: request.previous_response_id ?? null,
+		messageCount: extras.messageCount ?? null,
+		inputItemCount: extras.inputItemCount ?? (Array.isArray(request.input) ? request.input.length : null),
+		inputMode: extras.inputMode,
+		instructionLength: typeof request.instructions === "string" ? request.instructions.length : 0,
+		metadata: request.metadata ?? null,
+		toolCount: tools.length,
+		toolTypes: tools.map((tool) => tool.type),
+		toolNames: tools.map((tool) => summarizeToolName(tool)),
+		mcpServerLabels: tools
+			.filter((tool) => tool.type === "mcp")
+			.map((tool) => ("server_label" in tool && typeof tool.server_label === "string" ? tool.server_label : "unknown")),
+	};
+}
+
+function summarizeToolName(tool: NonNullable<ResponseCreateParamsBase["tools"]>[number]): string {
+	if ("name" in tool && typeof tool.name === "string") {
+		return tool.name;
+	}
+
+	if (tool.type === "mcp" && "server_label" in tool && typeof tool.server_label === "string") {
+		return `mcp:${tool.server_label}`;
+	}
+
+	return tool.type;
 }
 
 function isValidUrl(value: string): boolean {

@@ -1,6 +1,7 @@
 import type { TFile } from "obsidian";
 
 export type ChatRole = "assistant" | "system" | "user";
+export type ReasoningEffort = "high" | "low" | "medium" | "none";
 
 export interface ChatMessage {
 	role: ChatRole;
@@ -15,7 +16,8 @@ export interface ParsedSection extends ChatMessage {
 
 export interface NoteOverrides {
 	model?: string;
-	temperature?: number;
+	reasoning_effort?: ReasoningEffort;
+	temperature?: number | null;
 	max_tokens?: number;
 	stream?: boolean;
 	agent?: string;
@@ -39,6 +41,7 @@ export interface PluginSettings {
 	apiKey: string;
 	baseUrl: string;
 	defaultModel: string;
+	defaultReasoningEffort: ReasoningEffort;
 	defaultTemperature?: number;
 	defaultMaxTokens: number;
 	stream: boolean;
@@ -60,6 +63,7 @@ export interface ResolvedChatConfig {
 	apiKey: string;
 	baseUrl: string;
 	model: string;
+	reasoning_effort: ReasoningEffort;
 	temperature?: number;
 	max_tokens: number;
 	stream: boolean;

@@ -70,6 +70,7 @@ import {
 	type OpenAICompletion,
 	type OpenAITurn,
 } from "./openai-client";
+import { formatRequestModelLabel } from "./request-label";
 import type { RequestStatusManager } from "./request-status";
 import { buildAssistantPrefix, buildAssistantSuffix, getNextExchangeId } from "./response-anchors";
 import { StreamingWriter } from "./streaming-writer";
@@ -235,8 +236,9 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 
 	try {
 		const client = new OpenAIClient(config);
-		requestStatus.notifyRequestStart(`Calling ${config.model}`);
-		requestStatus.setCalling(config.model);
+		const requestModelLabel = formatRequestModelLabel(config);
+		requestStatus.notifyRequestStart(`Calling ${requestModelLabel}`);
+		requestStatus.setCalling(requestModelLabel);
 
 		if (shouldUseFetchTool || shouldUseMarkdownFileTool || shouldUseReferencedFileTool) {
 			const toolResult = await runToolConversation(
@@ -249,7 +251,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					linkedDocument,
 					preferReferencedFileSearchFirst: Boolean(referencedFileReadState && referencedFileReadState.oversizedPaths.size > 0),
 				}),
-				config.model,
+				requestModelLabel,
 				requestStatus,
 				{
 					includeFetchTool: shouldUseFetchTool,
@@ -289,17 +291,17 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 						},
 						{
 							onSearchStart: () => {
-								requestStatus.notifyToolUse("Using web search");
-								requestStatus.setWebSearch();
-							},
+									requestStatus.notifyToolUse("Using web search");
+									requestStatus.setWebSearch();
+								},
 							onToolUse: (text) => {
 								recordMcpNotice(text);
 							},
-							onText: (delta) => {
-								if (!didSetStreamingStatus) {
-									requestStatus.setStreaming(config.model);
-									didSetStreamingStatus = true;
-								}
+								onText: (delta) => {
+									if (!didSetStreamingStatus) {
+										requestStatus.setStreaming(requestModelLabel);
+										didSetStreamingStatus = true;
+									}
 
 								writer.append(delta);
 								streamedText += delta;
@@ -337,7 +339,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 						app,
 						client,
 						streamedResponse,
-						config.model,
+						requestModelLabel,
 						requestStatus,
 						{
 							includeFetchTool: shouldUseFetchTool,
@@ -379,7 +381,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 				},
 				onText: (delta) => {
 					if (!didSetStreamingStatus) {
-						requestStatus.setStreaming(config.model);
+						requestStatus.setStreaming(requestModelLabel);
 						didSetStreamingStatus = true;
 					}
 

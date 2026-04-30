@@ -4,6 +4,7 @@ import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
 import { parseNoteDocument } from "./frontmatter";
 import { OpenAIClient } from "./openai-client";
+import { formatRequestModelLabel } from "./request-label";
 import type { RequestStatusManager } from "./request-status";
 import type { RetitleApprover } from "./retitle-note-approval";
 import { inferRetitledBasename } from "./title-inference";
@@ -56,8 +57,9 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 	}
 
 	try {
-		requestStatus.notifyRequestStart(`Calling ${config.model}`);
-		requestStatus.setCalling(config.model);
+		const requestModelLabel = formatRequestModelLabel(config);
+		requestStatus.notifyRequestStart(`Calling ${requestModelLabel}`);
+		requestStatus.setCalling(requestModelLabel);
 
 		const client = new OpenAIClient(config);
 		const nextBasename = await inferRetitledBasename(client, {

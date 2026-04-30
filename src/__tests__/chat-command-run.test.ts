@@ -1093,7 +1093,7 @@ Update the proposal using [[Brief]].`);
 			}),
 			expect.anything(),
 		);
-		expect(requestStatus.setStreaming).toHaveBeenCalledWith("openai@gpt-5.4");
+		expect(requestStatus.setStreaming).toHaveBeenCalledWith("openai@gpt-5.4 (temperature: 0.2)");
 		expect(editor.getValue()).toContain("Final streamed answer.");
 		expect(editor.getValue()).toContain("### Referenced files");
 	});
@@ -1377,6 +1377,35 @@ Give me a very long answer.`);
 		expect(editor.getValue()).toContain("- Tool: docs.search_docs");
 	});
 
+	it("includes reasoning and temperature in the request-start notification when set", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const requestStatus = buildRequestStatus();
+		createMock.mockResolvedValue({
+			text: "Hello.",
+			sourcesAppendix: "",
+			hitMaxOutputTokens: false,
+			mcpNotices: [],
+		});
+
+		await runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: createEditor("# _You (1)_\n\nHello.") as never,
+			requestStatus,
+			settings: buildSettings({
+				defaultReasoningEffort: "high",
+				stream: false,
+			}),
+			view: { file: noteFile } as never,
+		});
+
+		expect(requestStatus.notifyRequestStart).toHaveBeenCalledWith(
+			"Calling openai@gpt-5.4 (reasoning: high, temperature: 0.2)",
+		);
+		expect(requestStatus.setCalling).toHaveBeenCalledWith(
+			"openai@gpt-5.4 (reasoning: high, temperature: 0.2)",
+		);
+	});
+
 	it("does not expose fetch for a plain url without explicit request intent", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 		createMock.mockResolvedValue({
@@ -1490,6 +1519,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		apiKey: "test-key",
 		baseUrl: "https://api.openai.com/v1",
 		defaultModel: "openai@gpt-5.4",
+		defaultReasoningEffort: "none",
 		defaultTemperature: 0.2,
 		defaultMaxTokens: 4096,
 		stream: true,

@@ -52,6 +52,38 @@ describe("resolveChatConfig", () => {
 		expect(config.enableMcpServers).toBe(true);
 		expect(config.mcpServers.map((server) => server.id)).toEqual(["weather", "docs"]);
 	});
+
+	it("uses note, then agent, then settings for reasoning_effort", () => {
+		expect(resolveChatConfig(buildSettings({ defaultReasoningEffort: "low" }), undefined, {}).reasoning_effort).toBe("low");
+		expect(
+			resolveChatConfig(buildSettings({ defaultReasoningEffort: "low" }), { reasoning_effort: "high" }, {}).reasoning_effort,
+		).toBe("high");
+		expect(
+			resolveChatConfig(
+				buildSettings({ defaultReasoningEffort: "low" }),
+				{ reasoning_effort: "high" },
+				{ reasoning_effort: "none" },
+			).reasoning_effort,
+		).toBe("none");
+	});
+
+	it("treats null temperature in note or agent overrides as explicitly omitting temperature", () => {
+		expect(resolveChatConfig(buildSettings({ defaultTemperature: 0.2 }), undefined, { temperature: null }).temperature).toBeUndefined();
+		expect(
+			resolveChatConfig(
+				buildSettings({ defaultTemperature: 0.2 }),
+				{ temperature: null },
+				{},
+			).temperature,
+		).toBeUndefined();
+		expect(
+			resolveChatConfig(
+				buildSettings({ defaultTemperature: 0.2 }),
+				{ temperature: 0.4 },
+				{ temperature: null },
+			).temperature,
+		).toBeUndefined();
+	});
 });
 
 function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
@@ -59,6 +91,7 @@ function buildSettings(overrides: Partial<PluginSettings> = {}): PluginSettings 
 		apiKey: "test-key",
 		baseUrl: "https://api.openai.com/v1",
 		defaultModel: "openai@gpt-5.4",
+		defaultReasoningEffort: "none",
 		defaultTemperature: 0.2,
 		defaultMaxTokens: 4096,
 		stream: true,
