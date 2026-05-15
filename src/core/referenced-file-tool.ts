@@ -166,19 +166,15 @@ export function getReferencedFileSectionToolDefinition(): FunctionTool {
 	};
 }
 
-export function buildReferencedFileToolPolicy(options: { preferSearchFirst?: boolean } = {}): string {
+export function buildReferencedFileToolPolicy(): string {
 	return [
 		"Referenced file read policy:",
 		"- Linked supported files from the current chat note and the active agent prompt are available through read_referenced_file instead of being preloaded.",
 		"- Linked supported files are also available through search_referenced_file, which returns matching snippets with line ranges.",
 		"- Linked supported files are also available through read_referenced_file_section, which reads the enclosing section for a line number from search results.",
-		...(options.preferSearchFirst
-			? [
-					"- For large referenced files, prefer search_referenced_file first.",
-					"- When search_referenced_file finds a relevant line, call read_referenced_file_section with that line number before asking for a full file read.",
-					"- Only call read_referenced_file if search and section reads are insufficient.",
-				]
-			: ["- Call read_referenced_file when you need the full contents of a linked file."]),
+		"- Call read_referenced_file when you need the full contents of a linked file, including large files.",
+		"- Only use search_referenced_file when the user explicitly asks you to search within a file instead of loading the full file, or when a tool result tells you the user chose search for a large file.",
+		"- When search_referenced_file finds a relevant line, call read_referenced_file_section with that line number before asking for another full file read.",
 		"- You may follow links found inside files that were successfully read earlier in this turn.",
 		"- Never claim you read a file unless read_referenced_file returned status success in this turn.",
 	].join("\n");

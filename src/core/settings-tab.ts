@@ -204,7 +204,7 @@ export class ConvoGptSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Referenced file auto-read max chars")
-			.setDesc("Files larger than this prompt for approval to send a truncated preview or the full file.")
+			.setDesc("Files larger than this prompt for approval to send the full file or search within it instead.")
 			.addText((text) =>
 				text.setValue(String(this.plugin.settings.referencedFileReadMaxChars)).onChange(async (value) => {
 					const parsed = Number.parseInt(value.trim(), 10);

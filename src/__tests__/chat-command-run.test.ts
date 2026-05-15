@@ -353,9 +353,11 @@ describe("runChatCommand", () => {
 		});
 
 		const firstTurn = createTurnMock.mock.calls[0]?.[0];
-		expect(firstTurn.messages.some((message: { content: string }) => message.content.includes("prefer search_referenced_file first"))).toBe(
-			true,
-		);
+		expect(
+			firstTurn.messages.some((message: { content: string }) =>
+				message.content.includes("Call read_referenced_file when you need the full contents of a linked file, including large files."),
+			),
+		).toBe(true);
 
 		const secondTurn = createTurnMock.mock.calls[1]?.[0];
 		expect(JSON.parse(secondTurn.inputItems[0].output)).toMatchObject({

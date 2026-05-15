@@ -283,7 +283,6 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					includeMarkdownFileTool: shouldUseMarkdownFileTool,
 					includeReferencedFileTool: shouldUseReferencedFileTool,
 					linkedDocument,
-					preferReferencedFileSearchFirst: Boolean(referencedFileReadState && referencedFileReadState.oversizedPaths.size > 0),
 				}),
 				requestModelLabel,
 				requestStatus,
@@ -1095,7 +1094,6 @@ function withToolPolicies(
 		includeMarkdownFileTool: boolean;
 		includeReferencedFileTool: boolean;
 		linkedDocument?: LinkedDocumentContext;
-		preferReferencedFileSearchFirst?: boolean;
 	},
 ): ChatMessage[] {
 	const nextMessages = [...messages];
@@ -1110,9 +1108,7 @@ function withToolPolicies(
 	if (options.includeReferencedFileTool) {
 		nextMessages.push({
 			role: "system",
-			content: buildReferencedFileToolPolicy({
-				preferSearchFirst: options.preferReferencedFileSearchFirst,
-			}),
+			content: buildReferencedFileToolPolicy(),
 		});
 	}
 

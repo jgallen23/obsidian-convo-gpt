@@ -125,9 +125,10 @@ describe("referenced file read service", () => {
 		expect(result.message).toContain("not available");
 	});
 
-	it("reads allowed csv files and truncates oversized content after approval", async () => {
+	it("reads allowed csv files in full after oversized-file approval", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 		const csvFile = createFile("Reports/data.csv");
+		const rawContent = "col1,col2\n".repeat(2000);
 		const app = {
 			metadataCache: {
 				getFirstLinkpathDest: (path: string, currentPath: string) => {
@@ -139,7 +140,7 @@ describe("referenced file read service", () => {
 			},
 			vault: {
 				getAbstractFileByPath: (path: string) => (path === csvFile.path ? csvFile : null),
-				read: async () => "col1,col2\n".repeat(2000),
+				read: async () => rawContent,
 			},
 		};
 
@@ -155,14 +156,15 @@ describe("referenced file read service", () => {
 			app as never,
 			JSON.stringify({ reference: "Reports/data.csv" }),
 			state,
-			async () => "truncate",
+			async () => "full",
 		);
 
 		expect(result.status).toBe("success");
 		expect(result.fileType).toBe("csv");
 		expect(result.path).toBe("Reports/data.csv");
-		expect(result.truncated).toBe(true);
-		expect(result.content?.endsWith("\n…")).toBe(true);
+		expect(result.truncated).toBe(false);
+		expect(result.content).toBe(rawContent);
+		expect(result.message).toContain("after approval");
 	});
 
 	it("can send the full oversized referenced file after approval", async () => {

@@ -13,7 +13,7 @@ import {
 	type ReferencedFileSectionToolResult,
 } from "./referenced-file-tool";
 
-export type OversizedReferencedFileDecision = "cancel" | "full" | "search" | "truncate";
+export type OversizedReferencedFileDecision = "cancel" | "full" | "search";
 
 const REFERENCED_FILE_SEARCH_CONTEXT_LINES = 1;
 const REFERENCED_FILE_SEARCH_MAX_MATCHES = 5;
@@ -44,7 +44,7 @@ export interface ReferencedFileReadState {
 	aliasMap: Map<string, Set<string>>;
 	allowedPaths: Set<string>;
 	maxContentChars: number;
-	oversizedReadDecisions: Map<string, Extract<OversizedReferencedFileDecision, "full" | "search" | "truncate">>;
+	oversizedReadDecisions: Map<string, Extract<OversizedReferencedFileDecision, "full" | "search">>;
 	oversizedPaths: Set<string>;
 	supportedExtensions: Set<string>;
 }
@@ -147,7 +147,7 @@ export async function executeReferencedFileReadToolCall(
 					sizeChars: rawContent.length,
 					maxChars: state.maxContentChars,
 				}, options.signal)
-			: cachedDecision ?? "truncate";
+			: cachedDecision ?? "full";
 	throwIfCanceled(options.signal);
 
 	if (decision === "cancel") {
@@ -177,24 +177,19 @@ export async function executeReferencedFileReadToolCall(
 		state.oversizedReadDecisions.set(existing.path, decision);
 	}
 
-	const truncated = oversized && decision === "truncate";
-	const content = truncated ? `${rawContent.slice(0, state.maxContentChars)}\n…` : rawContent;
-
 	return {
 		status: "success",
 		message:
 			rawContent.length === 0
 				? `Read empty ${existing.extension} file ${existing.path}.`
-				: truncated
-					? `Read ${existing.extension} file ${existing.path} (truncated).`
-					: oversized
-						? `Read full ${existing.extension} file ${existing.path} after approval.`
-						: `Read ${existing.extension} file ${existing.path}.`,
+				: oversized
+					? `Read full ${existing.extension} file ${existing.path} after approval.`
+					: `Read ${existing.extension} file ${existing.path}.`,
 		reference,
 		path: existing.path,
 		fileType: existing.extension.toLowerCase(),
-		content,
-		truncated,
+		content: rawContent,
+		truncated: false,
 	};
 }
 
@@ -514,17 +509,12 @@ class OversizedReferencedFileReadApprovalModal extends Modal {
 			text: `${this.request.path} is ${formatCount(this.request.sizeChars)} characters, which exceeds the auto-read limit of ${formatCount(this.request.maxChars)} characters.`,
 		});
 		contentEl.createEl("p", {
-			text: "Choose whether to send a truncated preview or the full file to the model for this turn.",
+			text: "Choose whether to send the full file to the model for this turn or search within it instead.",
 		});
 
 		new Setting(contentEl)
 			.addButton((button) =>
-				button.setButtonText(`Read first ${formatCount(this.request.maxChars)} chars`).setCta().onClick(() => {
-					this.settle("truncate");
-				}),
-			)
-			.addButton((button) =>
-				button.setButtonText("Send full file").onClick(() => {
+				button.setButtonText("Send full file").setCta().onClick(() => {
 					this.settle("full");
 				}),
 			)
