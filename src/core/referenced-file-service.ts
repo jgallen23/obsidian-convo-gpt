@@ -1,4 +1,5 @@
 import { Modal, Setting, TFile, type App } from "obsidian";
+import { throwIfCanceled, waitForCancelable } from "./active-request-manager";
 import { DEFAULT_REFERENCED_FILE_MAX_CHARS } from "./constants";
 import { resolveNoteReferences } from "./context-resolver";
 import {
@@ -25,13 +26,17 @@ export interface ReferencedFileReadApprovalRequest {
 	sizeChars: number;
 }
 
-export type ReferencedFileReadApprover = (request: ReferencedFileReadApprovalRequest) => Promise<OversizedReferencedFileDecision>;
+export type ReferencedFileReadApprover = (
+	request: ReferencedFileReadApprovalRequest,
+	signal?: AbortSignal,
+) => Promise<OversizedReferencedFileDecision>;
 
 export interface ReferencedFileReadStatusCallbacks {
 	onWaitingForApproval?: () => void;
 }
 
 export interface ReferencedFileReadExecutionOptions {
+	signal?: AbortSignal;
 	statusCallbacks?: ReferencedFileReadStatusCallbacks;
 }
 
@@ -105,7 +110,7 @@ export async function executeReferencedFileReadToolCall(
 	app: App,
 	argumentsJson: string,
 	state: ReferencedFileReadState,
-	approver: ReferencedFileReadApprover = (request) => requestReferencedFileReadApproval(app, request),
+	approver: ReferencedFileReadApprover = (request, signal) => requestReferencedFileReadApproval(app, request, signal),
 	options: ReferencedFileReadExecutionOptions = {},
 ): Promise<ReferencedFileReadToolResult> {
 	const parsed = parseReferencedFileReadRequest(argumentsJson);
@@ -130,7 +135,9 @@ export async function executeReferencedFileReadToolCall(
 	}
 	const existing = resolvedFile.file;
 
+	throwIfCanceled(options.signal);
 	const rawContent = await app.vault.read(existing);
+	throwIfCanceled(options.signal);
 	const oversized = rawContent.length > state.maxContentChars;
 	const cachedDecision = oversized ? state.oversizedReadDecisions.get(existing.path) : undefined;
 	const decision =
@@ -139,8 +146,9 @@ export async function executeReferencedFileReadToolCall(
 					path: existing.path,
 					sizeChars: rawContent.length,
 					maxChars: state.maxContentChars,
-				})
+				}, options.signal)
 			: cachedDecision ?? "truncate";
+	throwIfCanceled(options.signal);
 
 	if (decision === "cancel") {
 		return {
@@ -194,6 +202,7 @@ export async function executeReferencedFileSearchToolCall(
 	app: App,
 	argumentsJson: string,
 	state: ReferencedFileReadState,
+	options: ReferencedFileReadExecutionOptions = {},
 ): Promise<ReferencedFileSearchToolResult> {
 	const parsed = parseReferencedFileSearchRequest(argumentsJson);
 	if (!parsed.success) {
@@ -225,7 +234,9 @@ export async function executeReferencedFileSearchToolCall(
 		return resolvedFile.result;
 	}
 	const existing = resolvedFile.file;
+	throwIfCanceled(options.signal);
 	const rawContent = await app.vault.read(existing);
+	throwIfCanceled(options.signal);
 	const searchResult = searchReferencedFileContent(rawContent, query);
 
 	return {
@@ -249,6 +260,7 @@ export async function executeReferencedFileSectionToolCall(
 	app: App,
 	argumentsJson: string,
 	state: ReferencedFileReadState,
+	options: ReferencedFileReadExecutionOptions = {},
 ): Promise<ReferencedFileSectionToolResult> {
 	const parsed = parseReferencedFileSectionReadRequest(argumentsJson);
 	if (!parsed.success) {
@@ -272,7 +284,9 @@ export async function executeReferencedFileSectionToolCall(
 	}
 
 	const existing = resolvedFile.file;
+	throwIfCanceled(options.signal);
 	const rawContent = await app.vault.read(existing);
+	throwIfCanceled(options.signal);
 	const lines = rawContent.split(/\r?\n/);
 	if (parsed.data.line > lines.length) {
 		return {
@@ -351,9 +365,10 @@ async function requestOversizedReferencedFileDecision(
 	approver: ReferencedFileReadApprover,
 	statusCallbacks: ReferencedFileReadStatusCallbacks | undefined,
 	request: ReferencedFileReadApprovalRequest,
+	signal?: AbortSignal,
 ): Promise<OversizedReferencedFileDecision> {
 	statusCallbacks?.onWaitingForApproval?.();
-	return approver(request);
+	return waitForCancelable(approver(request, signal), signal);
 }
 
 function resolveReadableReferencedFile(
@@ -444,9 +459,22 @@ function resolveAllowedReferencedPath(
 export function requestReferencedFileReadApproval(
 	app: App,
 	request: ReferencedFileReadApprovalRequest,
+	signal?: AbortSignal,
 ): Promise<OversizedReferencedFileDecision> {
+	if (signal?.aborted) {
+		return Promise.resolve("cancel");
+	}
+
 	return new Promise((resolve) => {
-		new OversizedReferencedFileReadApprovalModal(app, request, resolve).open();
+		const modal = new OversizedReferencedFileReadApprovalModal(app, request, (decision) => {
+			signal?.removeEventListener("abort", abort);
+			resolve(decision);
+		});
+		const abort = () => {
+			modal.close();
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+		modal.open();
 	});
 }
 

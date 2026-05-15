@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PluginActiveRequestManager } from "../core/active-request-manager";
 import type { PluginSettings } from "../core/types";
 import { runRetitleNoteCommand } from "../core/retitle-note-command";
 
@@ -91,10 +92,13 @@ describe("runRetitleNoteCommand", () => {
 			expect.objectContaining({ path: "Projects/2026-04-02 - Old Title.md" }),
 			"Projects/2026-04-02 - Project kickoff notes.md",
 		);
-		expect(approver).toHaveBeenCalledWith({
-			currentBasename: "2026-04-02 - Old Title",
-			nextBasename: "2026-04-02 - Project kickoff notes",
-		});
+		expect(approver).toHaveBeenCalledWith(
+			{
+				currentBasename: "2026-04-02 - Old Title",
+				nextBasename: "2026-04-02 - Project kickoff notes",
+			},
+			expect.any(AbortSignal),
+		);
 		expect(requestStatus.setWaitingForRenameApproval).toHaveBeenCalled();
 		expect(requestStatus.clear).toHaveBeenCalled();
 		expect(noticeMessages).toContain("Convo GPT renamed note to 2026-04-02 - Project kickoff notes");
@@ -160,6 +164,50 @@ describe("runRetitleNoteCommand", () => {
 			expect.objectContaining({ path: "Projects/Old Title.md" }),
 			"Projects/Project kickoff notes.md",
 		);
+	});
+
+	it("suppresses the generic failure notice when canceled", async () => {
+		const requestManager = new PluginActiveRequestManager();
+		let markStarted: (() => void) | null = null;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+
+		createMock.mockImplementationOnce(async (_messages, options) => {
+			markStarted?.();
+			return new Promise((_resolve, reject) => {
+				options.signal.addEventListener(
+					"abort",
+					() => {
+						reject(new Error("Request aborted"));
+					},
+					{ once: true },
+				);
+			});
+		});
+
+		const runPromise = runRetitleNoteCommand({
+			app: {
+				fileManager: { renameFile: vi.fn() },
+				metadataCache: {},
+				vault: {},
+			} as never,
+			approver: vi.fn().mockResolvedValue(true),
+			editor: { getValue: () => "# Body\n\nMeeting notes." } as never,
+			notify: (message) => {
+				noticeMessages.push(message);
+			},
+			requestManager,
+			view: { file: buildFile("Projects/Old Title.md", "Old Title") } as never,
+			settings: buildSettings(),
+			requestStatus: buildRequestStatus(),
+		});
+
+		await started;
+		expect(requestManager.cancelActiveRequest()).toBe(true);
+		await runPromise;
+
+		expect(noticeMessages).not.toContain("Convo GPT request failed: Request aborted");
 	});
 });
 

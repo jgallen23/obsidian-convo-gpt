@@ -5,11 +5,23 @@ export interface RetitleApprovalRequest {
 	nextBasename: string;
 }
 
-export type RetitleApprover = (request: RetitleApprovalRequest) => Promise<boolean>;
+export type RetitleApprover = (request: RetitleApprovalRequest, signal?: AbortSignal) => Promise<boolean>;
 
-export function requestRetitleApproval(app: App, request: RetitleApprovalRequest): Promise<boolean> {
+export function requestRetitleApproval(app: App, request: RetitleApprovalRequest, signal?: AbortSignal): Promise<boolean> {
+	if (signal?.aborted) {
+		return Promise.resolve(false);
+	}
+
 	return new Promise((resolve) => {
-		new RetitleApprovalModal(app, request, resolve).open();
+		const modal = new RetitleApprovalModal(app, request, (approved) => {
+			signal?.removeEventListener("abort", abort);
+			resolve(approved);
+		});
+		const abort = () => {
+			modal.close();
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+		modal.open();
 	});
 }
 

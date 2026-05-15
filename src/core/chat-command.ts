@@ -1,4 +1,5 @@
 import { Notice, TFile, type App, type Editor, type MarkdownView } from "obsidian";
+import { isConvoAbortError, PluginActiveRequestManager, type ActiveRequestManager } from "./active-request-manager";
 import { resolveAgent } from "./agent-resolver";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
@@ -80,6 +81,7 @@ import type { ChatMessage, PluginSettings, ResolvedChatConfig } from "./types";
 interface ChatCommandContext {
 	app: App;
 	editor: Editor;
+	requestManager?: ActiveRequestManager;
 	requestStatus: RequestStatusManager;
 	view: MarkdownView;
 	settings: PluginSettings;
@@ -87,6 +89,7 @@ interface ChatCommandContext {
 
 export async function runChatCommand(context: ChatCommandContext): Promise<void> {
 	const { app, editor, requestStatus, settings, view } = context;
+	const requestManager = context.requestManager ?? new PluginActiveRequestManager();
 	const file = view.file;
 
 	if (!file) {
@@ -103,6 +106,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let agentBodyForTitle = "";
 	let agentFileForTitle: TFile | null = null;
 	let shouldAutoRetitle = false;
+	let activeRequest: ReturnType<ActiveRequestManager["beginActiveRequest"]> | null = null;
 
 	try {
 		const editorText = editor.getValue();
@@ -198,6 +202,14 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	}
 
 	const lastMessage = messages[messages.length - 1];
+	activeRequest = requestManager.beginActiveRequest();
+	if (!activeRequest) {
+		new Notice("Convo GPT already has an active request. Cancel it before starting another one.");
+		return;
+	}
+	const activeRequestSignal = activeRequest.signal;
+
+	const assistantBlockStartOffset = editor.getValue().length;
 	const assistantPrefix = buildAssistantPrefix(config.model, exchangeId);
 	let writeOffset = editor.getValue().length;
 	editor.replaceRange(assistantPrefix, editor.offsetToPos(writeOffset));
@@ -211,6 +223,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let shouldPlaceFinalCursor = true;
 	let shouldAttemptAutoRetitle = false;
 	let hitMaxOutputTokens = false;
+	let wasCanceled = false;
 	const mcpNoticesUsed: string[] = [];
 	const recordMcpNotice = (text: string): void => {
 		requestStatus.notifyToolUse(text);
@@ -261,6 +274,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					onMcpNotice: recordMcpNotice,
 					referencedFileReadState,
 					requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
+					signal: activeRequestSignal,
 					stopBeforePlainAssistantTurn: config.stream,
 				},
 			);
@@ -280,37 +294,42 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					writer.start();
 					let didSetStreamingStatus = false;
 					let streamedText = "";
-					const streamedResponse = await client.streamTurn(
-						{
-							includeFetchTool: shouldUseFetchTool,
-							includeMarkdownFileTool: shouldUseMarkdownFileTool,
-							includeReferencedFileTool: shouldUseReferencedFileTool,
-							inputItems: continuation.inputItems,
-							previousResponseId: continuation.previousResponseId,
-							toolChoice: continuation.toolChoice,
-						},
-						{
-							onSearchStart: () => {
+					let streamedResponse: OpenAITurn;
+					try {
+						streamedResponse = await client.streamTurn(
+							{
+								includeFetchTool: shouldUseFetchTool,
+								includeMarkdownFileTool: shouldUseMarkdownFileTool,
+								includeReferencedFileTool: shouldUseReferencedFileTool,
+								inputItems: continuation.inputItems,
+								previousResponseId: continuation.previousResponseId,
+								toolChoice: continuation.toolChoice,
+							},
+							{
+								onSearchStart: () => {
 									requestStatus.notifyToolUse("Using web search");
 									requestStatus.setWebSearch();
 								},
-							onToolUse: (text) => {
-								recordMcpNotice(text);
-							},
+								onToolUse: (text) => {
+									recordMcpNotice(text);
+								},
 								onText: (delta) => {
 									if (!didSetStreamingStatus) {
 										requestStatus.setStreaming(requestModelLabel);
 										didSetStreamingStatus = true;
 									}
 
-								writer.append(delta);
-								streamedText += delta;
+									writer.append(delta);
+									streamedText += delta;
+								},
 							},
-						},
-					);
-					writer.stop();
-					writeOffset = editor.posToOffset(writer.getCursor());
-					shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
+							{ signal: activeRequestSignal },
+						);
+					} finally {
+						writer.stop();
+						writeOffset = editor.posToOffset(writer.getCursor());
+						shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
+					}
 
 					if (streamedResponse.toolCalls.length === 0) {
 						for (const notice of streamedResponse.mcpNotices ?? []) {
@@ -349,6 +368,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 							onMcpNotice: recordMcpNotice,
 							referencedFileReadState,
 							requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
+							signal: activeRequestSignal,
 							stopBeforePlainAssistantTurn: true,
 						},
 						continuation.state,
@@ -371,27 +391,31 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 			const writer = new StreamingWriter(editor, editor.offsetToPos(writeOffset));
 			writer.start();
 			let didSetStreamingStatus = false;
-					const completion = await client.stream(messages, {
-				onSearchStart: () => {
-					requestStatus.notifyToolUse("Using web search");
-					requestStatus.setWebSearch();
-				},
-				onToolUse: (text) => {
-					recordMcpNotice(text);
-				},
-				onText: (delta) => {
-					if (!didSetStreamingStatus) {
-						requestStatus.setStreaming(requestModelLabel);
-						didSetStreamingStatus = true;
-					}
+			let completion: OpenAICompletion;
+			try {
+				completion = await client.stream(messages, {
+					onSearchStart: () => {
+						requestStatus.notifyToolUse("Using web search");
+						requestStatus.setWebSearch();
+					},
+					onToolUse: (text) => {
+						recordMcpNotice(text);
+					},
+					onText: (delta) => {
+						if (!didSetStreamingStatus) {
+							requestStatus.setStreaming(requestModelLabel);
+							didSetStreamingStatus = true;
+						}
 
-					writer.append(delta);
-					completionText += delta;
-				},
-			});
-			writer.stop();
-			writeOffset = editor.posToOffset(writer.getCursor());
-			shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
+						writer.append(delta);
+						completionText += delta;
+					},
+				}, { signal: activeRequestSignal });
+			} finally {
+				writer.stop();
+				writeOffset = editor.posToOffset(writer.getCursor());
+				shouldPlaceFinalCursor = writer.isAutoFollowEnabled();
+			}
 			for (const notice of completion.mcpNotices ?? []) {
 				recordMcpNotice(notice);
 			}
@@ -405,7 +429,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 
 			sourcesAppendix = completion.sourcesAppendix;
 		} else {
-			const completion = await client.create(messages);
+			const completion = await client.create(messages, { signal: activeRequestSignal });
 			for (const notice of completion.mcpNotices ?? []) {
 				recordMcpNotice(notice);
 			}
@@ -432,28 +456,43 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		}
 		shouldAttemptAutoRetitle = shouldAutoRetitle;
 	} catch (error) {
+		if (isConvoAbortError(error)) {
+			wasCanceled = true;
+			if (writeOffset === completionStartOffset) {
+				editor.replaceRange("", editor.offsetToPos(assistantBlockStartOffset), editor.offsetToPos(writeOffset));
+				writeOffset = assistantBlockStartOffset;
+			}
+		} else {
 		const message = error instanceof Error ? error.message : String(error);
 		editor.replaceRange(`\n\n_Error: ${message}_`, editor.offsetToPos(writeOffset));
 		writeOffset += `\n\n_Error: ${message}_`.length;
 		new Notice(`Convo GPT request failed: ${message}`);
+		}
 	} finally {
 		requestStatus.clear();
 	}
 
-	const assistantSuffix = buildAssistantSuffix(exchangeId, shouldShowTopOfAnswerLink(completionText));
-	editor.replaceRange(assistantSuffix, editor.offsetToPos(writeOffset));
-	if (shouldPlaceFinalCursor) {
-		editor.setCursor(editor.offsetToPos(writeOffset + assistantSuffix.length));
-	}
+	try {
+		if (!wasCanceled || writeOffset > completionStartOffset) {
+			const assistantSuffix = buildAssistantSuffix(exchangeId, shouldShowTopOfAnswerLink(completionText));
+			editor.replaceRange(assistantSuffix, editor.offsetToPos(writeOffset));
+			if (shouldPlaceFinalCursor) {
+				editor.setCursor(editor.offsetToPos(writeOffset + assistantSuffix.length));
+			}
+		}
 
-	if (shouldAttemptAutoRetitle) {
-		const client = new OpenAIClient(config);
-		await autoRetitleChatNote(app, file, editor, client, {
-			agentBody: agentBodyForTitle,
-			agentFile: agentFileForTitle,
-			defaultSystemPrompt: config.defaultSystemPrompt,
-			systemCommands: config.system_commands,
-		});
+		if (shouldAttemptAutoRetitle) {
+			const client = new OpenAIClient(config);
+			await autoRetitleChatNote(app, file, editor, client, {
+				agentBody: agentBodyForTitle,
+				agentFile: agentFileForTitle,
+				defaultSystemPrompt: config.defaultSystemPrompt,
+				systemCommands: config.system_commands,
+				signal: activeRequestSignal,
+			});
+		}
+	} finally {
+		activeRequest?.finish();
 	}
 }
 
@@ -589,6 +628,7 @@ interface ToolConversationOptions {
 	onMcpNotice?: (text: string) => void;
 	referencedFileReadState?: ReferencedFileReadState;
 	requireLinkedDocumentSave?: boolean;
+	signal?: AbortSignal;
 	stopBeforePlainAssistantTurn?: boolean;
 }
 
@@ -641,7 +681,7 @@ async function runToolConversation(
 		includeMarkdownFileTool: options.includeMarkdownFileTool,
 		includeReferencedFileTool: options.includeReferencedFileTool,
 		toolChoice: options.requireLinkedDocumentSave ? "required" : undefined,
-	});
+	}, { signal: options.signal });
 	return resumeToolConversation(
 		app,
 		client,
@@ -708,7 +748,7 @@ async function resumeToolConversation(
 		for (const toolCall of response.toolCalls) {
 			if (toolCall.name === FETCH_TOOL_NAME && options.includeFetchTool) {
 				requestStatus.notifyToolUse(describeFetchToolCall(toolCall.arguments));
-				const result = await executeFetchToolCall(toolCall.arguments);
+				const result = await executeFetchToolCall(toolCall.arguments, undefined, options.signal);
 				logConvoDebug("chat.toolConversation.fetchResult", {
 					status: result.status,
 					url: "url" in result ? result.url ?? null : null,
@@ -730,6 +770,7 @@ async function resumeToolConversation(
 			if (toolCall.name === MARKDOWN_FILE_TOOL_NAME && options.includeMarkdownFileTool) {
 				requestStatus.notifyToolUse(describeMarkdownToolCall(toolCall.arguments));
 				const result = await executeMarkdownWriteToolCall(app, toolCall.arguments, undefined, {
+					signal: options.signal,
 					statusCallbacks: {
 						onSaving: (path) => {
 							requestStatus.setSaving(path);
@@ -765,6 +806,7 @@ async function resumeToolConversation(
 			if (toolCall.name === REFERENCED_FILE_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
 				requestStatus.notifyToolUse(describeReferencedFileToolCall(toolCall.arguments));
 				const result = await executeReferencedFileReadToolCall(app, toolCall.arguments, options.referencedFileReadState, undefined, {
+					signal: options.signal,
 					statusCallbacks: {
 						onWaitingForApproval: () => {
 							requestStatus.setWaitingForFileApproval();
@@ -789,7 +831,9 @@ async function resumeToolConversation(
 
 			if (toolCall.name === REFERENCED_FILE_SEARCH_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
 				requestStatus.notifyToolUse(describeReferencedFileSearchToolCall(toolCall.arguments));
-				const result = await executeReferencedFileSearchToolCall(app, toolCall.arguments, options.referencedFileReadState);
+				const result = await executeReferencedFileSearchToolCall(app, toolCall.arguments, options.referencedFileReadState, {
+					signal: options.signal,
+				});
 				logConvoDebug("chat.toolConversation.referencedFileSearchResult", {
 					status: result.status,
 					path: "path" in result ? result.path ?? null : null,
@@ -809,7 +853,9 @@ async function resumeToolConversation(
 
 			if (toolCall.name === REFERENCED_FILE_SECTION_TOOL_NAME && options.includeReferencedFileTool && options.referencedFileReadState) {
 				requestStatus.notifyToolUse(describeReferencedFileSectionToolCall(toolCall.arguments));
-				const result = await executeReferencedFileSectionToolCall(app, toolCall.arguments, options.referencedFileReadState);
+				const result = await executeReferencedFileSectionToolCall(app, toolCall.arguments, options.referencedFileReadState, {
+					signal: options.signal,
+				});
 				logConvoDebug("chat.toolConversation.referencedFileSectionResult", {
 					status: result.status,
 					path: "path" in result ? result.path ?? null : null,
@@ -873,7 +919,7 @@ async function resumeToolConversation(
 			inputItems: toolOutputs,
 			previousResponseId: response.responseId,
 			toolChoice: nextToolChoice,
-		});
+		}, { signal: options.signal });
 	}
 
 	logConvoDebug("chat.toolConversation.roundLimitExceeded", {
@@ -1113,6 +1159,7 @@ async function autoRetitleChatNote(
 		agentBody: string;
 		agentFile: TFile | null;
 		defaultSystemPrompt: string;
+		signal?: AbortSignal;
 		systemCommands: string[];
 	},
 ): Promise<void> {
@@ -1141,6 +1188,7 @@ async function autoRetitleChatNote(
 			noteContent: enrichedDocument.content,
 			agentBody,
 			defaultSystemPrompt: context.defaultSystemPrompt,
+			signal: context.signal,
 			systemCommands: context.systemCommands,
 		});
 		const nextPath = buildSiblingMarkdownPath(file.path, nextBasename);
@@ -1154,6 +1202,10 @@ async function autoRetitleChatNote(
 		});
 		await app.fileManager.renameFile(file, nextPath);
 	} catch (error) {
+		if (isConvoAbortError(error)) {
+			return;
+		}
+
 		const message = error instanceof Error ? error.message : String(error);
 		logConvoDebug("chat.autoRetitle.failed", {
 			notePath: file.path,

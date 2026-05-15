@@ -1,5 +1,6 @@
 import { Buffer } from "buffer";
 import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
+import { PluginActiveRequestManager } from "./core/active-request-manager";
 import { runChatCommand } from "./core/chat-command";
 import { setConvoDebugLoggingEnabled } from "./core/debug-log";
 import { runChatWithDocumentCommand, runNewChatCommand, runNewChatRightCommand } from "./core/new-chat-command";
@@ -17,6 +18,7 @@ if (typeof globalThis.Buffer === "undefined") {
 
 export default class ConvoGptPlugin extends Plugin {
 	settings: PluginSettings = DEFAULT_SETTINGS;
+	private activeRequestManager = new PluginActiveRequestManager();
 	private requestStatusManager!: PluginRequestStatusManager;
 
 	override async onload(): Promise<void> {
@@ -45,10 +47,27 @@ export default class ConvoGptPlugin extends Plugin {
 				void runChatCommand({
 					app: this.app,
 					editor,
+					requestManager: this.activeRequestManager,
 					view,
 					settings: this.settings,
 					requestStatus: this.requestStatusManager,
 				});
+			},
+		});
+
+		this.addCommand({
+			id: "cancel-current-request",
+			name: "Cancel Current Request",
+			icon: "square",
+			callback: () => {
+				const canceled = this.activeRequestManager.cancelActiveRequest();
+				if (!canceled) {
+					new Notice("Convo GPT has no active request to cancel.");
+					return;
+				}
+
+				this.requestStatusManager.clear();
+				new Notice("Convo GPT request canceled.");
 			},
 		});
 
@@ -96,11 +115,12 @@ export default class ConvoGptPlugin extends Plugin {
 
 				void runRetitleNoteCommand({
 					app: this.app,
-					approver: (request) => requestRetitleApproval(this.app, request),
+					approver: (request, signal) => requestRetitleApproval(this.app, request, signal),
 					editor,
 					notify: (message) => {
 						new Notice(message);
 					},
+					requestManager: this.activeRequestManager,
 					view,
 					settings: this.settings,
 					requestStatus: this.requestStatusManager,
@@ -110,6 +130,7 @@ export default class ConvoGptPlugin extends Plugin {
 	}
 
 	override onunload(): void {
+		this.activeRequestManager.cancelActiveRequest();
 		this.requestStatusManager.clear();
 	}
 

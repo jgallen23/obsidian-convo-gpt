@@ -1,4 +1,5 @@
 import { Modal, Setting, TFile, TFolder, type App } from "obsidian";
+import { throwIfCanceled, waitForCancelable } from "./active-request-manager";
 import { logConvoDebug } from "./debug-log";
 import {
 	buildMarkdownWritePreview,
@@ -17,7 +18,7 @@ export interface MarkdownWriteApprovalRequest {
 	preview: string;
 }
 
-export type MarkdownWriteApprover = (request: MarkdownWriteApprovalRequest) => Promise<boolean>;
+export type MarkdownWriteApprover = (request: MarkdownWriteApprovalRequest, signal?: AbortSignal) => Promise<boolean>;
 
 export interface MarkdownWriteStatusCallbacks {
 	onSaving?: (path: string) => void;
@@ -25,6 +26,7 @@ export interface MarkdownWriteStatusCallbacks {
 }
 
 export interface MarkdownWriteExecutionOptions {
+	signal?: AbortSignal;
 	statusCallbacks?: MarkdownWriteStatusCallbacks;
 	trustedPaths?: ReadonlySet<string>;
 }
@@ -32,7 +34,7 @@ export interface MarkdownWriteExecutionOptions {
 export async function executeMarkdownWriteToolCall(
 	app: App,
 	argumentsJson: string,
-	approver: MarkdownWriteApprover = (request) => requestMarkdownWriteApproval(app, request),
+	approver: MarkdownWriteApprover = (request, signal) => requestMarkdownWriteApproval(app, request, signal),
 	options: MarkdownWriteExecutionOptions = {},
 ): Promise<MarkdownWriteToolResult> {
 	const parsed = parseMarkdownWriteRequest(argumentsJson);
@@ -53,6 +55,7 @@ export async function executeMarkdownWriteRequest(
 	options: MarkdownWriteExecutionOptions = {},
 ): Promise<MarkdownWriteToolResult> {
 	const statusCallbacks = options.statusCallbacks ?? {};
+	throwIfCanceled(options.signal);
 	logConvoDebug("markdownWrite.execute.start", {
 		requestedPath: request.path,
 		operation: request.operation,
@@ -117,12 +120,13 @@ export async function executeMarkdownWriteRequest(
 				exists: existing instanceof TFile,
 				reason: request.reason?.trim() || "Model requested a markdown file change.",
 				preview: buildMarkdownWritePreview(request.content),
-			});
+			}, options.signal);
 	logConvoDebug("markdownWrite.execute.approval", {
 		resolvedPath: resolved.path,
 		operation: request.operation,
 		approved: approval,
 	});
+	throwIfCanceled(options.signal);
 
 	if (!approval) {
 		return {
@@ -238,14 +242,27 @@ async function requestApproval(
 	approver: MarkdownWriteApprover,
 	statusCallbacks: MarkdownWriteStatusCallbacks,
 	request: MarkdownWriteApprovalRequest,
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	statusCallbacks.onWaitingForApproval?.();
-	return approver(request);
+	return waitForCancelable(approver(request, signal), signal);
 }
 
-export function requestMarkdownWriteApproval(app: App, request: MarkdownWriteApprovalRequest): Promise<boolean> {
+export function requestMarkdownWriteApproval(app: App, request: MarkdownWriteApprovalRequest, signal?: AbortSignal): Promise<boolean> {
+	if (signal?.aborted) {
+		return Promise.resolve(false);
+	}
+
 	return new Promise((resolve) => {
-		new MarkdownWriteApprovalModal(app, request, resolve).open();
+		const modal = new MarkdownWriteApprovalModal(app, request, (approved) => {
+			signal?.removeEventListener("abort", abort);
+			resolve(approved);
+		});
+		const abort = () => {
+			modal.close();
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+		modal.open();
 	});
 }
 

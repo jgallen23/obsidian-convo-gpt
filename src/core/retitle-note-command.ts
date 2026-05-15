@@ -1,4 +1,5 @@
 import type { App, Editor, MarkdownView } from "obsidian";
+import { isConvoAbortError, PluginActiveRequestManager, waitForCancelable, type ActiveRequestManager } from "./active-request-manager";
 import { resolveAgent } from "./agent-resolver";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
@@ -15,6 +16,7 @@ interface RetitleNoteCommandContext {
 	approver: RetitleApprover;
 	editor: Editor;
 	notify: (message: string) => void;
+	requestManager?: ActiveRequestManager;
 	requestStatus: RequestStatusManager;
 	view: MarkdownView;
 	settings: PluginSettings;
@@ -22,6 +24,7 @@ interface RetitleNoteCommandContext {
 
 export async function runRetitleNoteCommand(context: RetitleNoteCommandContext): Promise<void> {
 	const { app, approver, editor, notify, requestStatus, settings, view } = context;
+	const requestManager = context.requestManager ?? new PluginActiveRequestManager();
 	const file = view.file;
 
 	if (!file) {
@@ -39,6 +42,12 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 	const config = resolveChatConfig(settings, agent?.frontmatter, document.overrides);
 	if (!config.apiKey) {
 		notify("Convo GPT is missing an OpenAI API key.");
+		return;
+	}
+
+	const activeRequest = requestManager.beginActiveRequest();
+	if (!activeRequest) {
+		notify("Convo GPT already has an active request. Cancel it before starting another one.");
 		return;
 	}
 
@@ -68,6 +77,7 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 			agentBody,
 			defaultSystemPrompt: config.defaultSystemPrompt,
 			systemCommands: config.system_commands,
+			signal: activeRequest.signal,
 		});
 		const nextPath = buildSiblingMarkdownPath(file.path, nextBasename);
 
@@ -77,10 +87,10 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 		}
 
 		requestStatus.setWaitingForRenameApproval();
-		const approved = await approver({
+		const approved = await waitForCancelable(approver({
 			currentBasename: file.basename,
 			nextBasename,
-		});
+		}, activeRequest.signal), activeRequest.signal);
 		if (!approved) {
 			notify("Convo GPT rename canceled.");
 			return;
@@ -89,10 +99,15 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 		await app.fileManager.renameFile(file, nextPath);
 		notify(`Convo GPT renamed note to ${nextBasename}`);
 	} catch (error) {
+		if (isConvoAbortError(error)) {
+			return;
+		}
+
 		const message = error instanceof Error ? error.message : String(error);
 		notify(`Convo GPT request failed: ${message}`);
 	} finally {
 		requestStatus.clear();
+		activeRequest.finish();
 	}
 }
 

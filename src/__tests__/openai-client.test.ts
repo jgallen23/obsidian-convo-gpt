@@ -103,6 +103,20 @@ describe("OpenAI client request metadata", () => {
 		expect(request).not.toHaveProperty("temperature");
 	});
 
+	it("passes an abort signal to non-streaming requests", async () => {
+		const client = new OpenAIClient(buildConfig());
+		const signal = new AbortController().signal;
+		const create = vi.fn(async () => ({
+			id: "resp_1",
+			output_text: "Hello",
+		}));
+		(client as unknown as { client: { responses: { create: typeof create } } }).client.responses.create = create;
+
+		await client.create([{ role: "user", content: "Hello" }], { signal });
+
+		expect(create).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({ signal }));
+	});
+
 	it("logs request debug details for non-streaming requests", async () => {
 		const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
 		setConvoDebugLoggingEnabled(true);
@@ -406,6 +420,33 @@ describe("OpenAI client request metadata", () => {
 				mcpServerLabels: ["weather"],
 			}),
 		);
+	});
+
+	it("passes an abort signal to streamed turn requests", async () => {
+		const client = new OpenAIClient(buildConfig());
+		const signal = new AbortController().signal;
+		const fakeStream = {
+			async *[Symbol.asyncIterator]() {},
+			finalResponse: async () => ({
+				id: "resp_2",
+				output: [],
+			}),
+		};
+		const stream = vi.fn(() => fakeStream);
+		(client as unknown as { client: { responses: { stream: typeof stream } } }).client.responses.stream = stream;
+
+		await client.streamTurn(
+			{
+				inputItems: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Continue" }] }] as never,
+				previousResponseId: "resp_prev",
+			},
+			{
+				onText: vi.fn(),
+			},
+			{ signal },
+		);
+
+		expect(stream).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({ signal }));
 	});
 
 	it("captures MCP tool usage from output_item.done stream events", async () => {

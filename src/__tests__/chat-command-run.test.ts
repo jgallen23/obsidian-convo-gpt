@@ -58,6 +58,7 @@ vi.mock(
 );
 
 import { TFile } from "obsidian";
+import { PluginActiveRequestManager } from "../core/active-request-manager";
 import { runChatCommand } from "../core/chat-command";
 import type { AgentDefinition, PluginSettings } from "../core/types";
 
@@ -106,19 +107,19 @@ vi.mock("../core/openai-client", () => ({
 	}),
 	OpenAIClient: class {
 		async createTurn(...args: unknown[]) {
-			return createTurnMock(args[0]);
+			return createTurnMock(args[0], args[1]);
 		}
 
 		async create(...args: unknown[]) {
-			return createMock(args[0]);
+			return createMock(args[0], args[1]);
 		}
 
 		async stream(...args: unknown[]) {
-			return streamMock(args[0], args[1]);
+			return streamMock(args[0], args[1], args[2]);
 		}
 
 		async streamTurn(...args: unknown[]) {
-			return streamTurnMock(args[0], args[1]);
+			return streamTurnMock(args[0], args[1], args[2]);
 		}
 	},
 }));
@@ -1092,6 +1093,9 @@ Update the proposal using [[Brief]].`);
 				previousResponseId: "resp_1",
 			}),
 			expect.anything(),
+			expect.objectContaining({
+				signal: expect.any(AbortSignal),
+			}),
 		);
 		expect(requestStatus.setStreaming).toHaveBeenCalledWith("openai@gpt-5.4 (temperature: 0.2)");
 		expect(editor.getValue()).toContain("Final streamed answer.");
@@ -1492,6 +1496,48 @@ Make it shorter.`) as never,
 
 		expect(createMock).toHaveBeenCalledTimes(1);
 		expect(renameFile).not.toHaveBeenCalled();
+	});
+
+	it("keeps partial streamed text and suppresses the error footer when canceled", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const editor = createEditor("# _You (1)_\n\nTell me a story.");
+		const requestStatus = buildRequestStatus();
+		const requestManager = new PluginActiveRequestManager();
+		let markStarted: (() => void) | null = null;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+
+		streamMock.mockImplementationOnce(async (_messages, callbacks, options) => {
+			callbacks.onText("Partial answer");
+			markStarted?.();
+			return new Promise((_resolve, reject) => {
+				options.signal.addEventListener(
+					"abort",
+					() => {
+						reject(new Error("Request aborted"));
+					},
+					{ once: true },
+				);
+			});
+		});
+
+		const runPromise = runChatCommand({
+			app: buildApp(noteFile, {}, {}) as never,
+			editor: editor as never,
+			requestManager,
+			requestStatus,
+			settings: buildSettings(),
+			view: { file: noteFile } as never,
+		});
+
+		await started;
+		expect(requestManager.cancelActiveRequest()).toBe(true);
+		await runPromise;
+
+		expect(editor.getValue()).toContain("Partial answer");
+		expect(editor.getValue()).not.toContain("_Error: Request aborted_");
+		expect(requestStatus.clear).toHaveBeenCalled();
 	});
 
 });

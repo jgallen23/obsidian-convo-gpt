@@ -66,6 +66,10 @@ export interface StreamCallbacks {
 	onText: (delta: string) => void;
 }
 
+export interface OpenAIRequestOptions {
+	signal?: AbortSignal;
+}
+
 export class OpenAIClient {
 	private readonly client: OpenAI;
 	private readonly config: ResolvedChatConfig;
@@ -80,25 +84,29 @@ export class OpenAIClient {
 		});
 	}
 
-	async create(messages: ChatMessage[]): Promise<OpenAICompletion> {
+	async create(messages: ChatMessage[], options: OpenAIRequestOptions = {}): Promise<OpenAICompletion> {
 		const request = this.buildNonStreamingRequest(messages);
 		logConvoDebug("openai.create.request", summarizeRequestForDebug(request, {
 			apiBaseUrl: this.config.baseUrl,
 			messageCount: messages.length,
 			inputMode: "messages",
 		}));
-		const response = await this.client.responses.create(request);
+		const response = await this.client.responses.create(request, {
+			signal: options.signal,
+		});
 		return this.parseCompletion(response);
 	}
 
-	async stream(messages: ChatMessage[], callbacks: StreamCallbacks): Promise<OpenAICompletion> {
+	async stream(messages: ChatMessage[], callbacks: StreamCallbacks, options: OpenAIRequestOptions = {}): Promise<OpenAICompletion> {
 		const request = this.buildStreamingRequest(messages);
 		logConvoDebug("openai.stream.request", summarizeRequestForDebug(request, {
 			apiBaseUrl: this.config.baseUrl,
 			messageCount: messages.length,
 			inputMode: "messages",
 		}));
-		const stream = this.client.responses.stream(request);
+		const stream = this.client.responses.stream(request, {
+			signal: options.signal,
+		});
 		let fullText = "";
 		const emittedMcpNoticeKeys = new Set<string>();
 
@@ -122,7 +130,7 @@ export class OpenAIClient {
 		return parsed;
 	}
 
-	async streamTurn(params: CreateTurnParams, callbacks: StreamCallbacks): Promise<OpenAITurn> {
+	async streamTurn(params: CreateTurnParams, callbacks: StreamCallbacks, options: OpenAIRequestOptions = {}): Promise<OpenAITurn> {
 		const request = this.buildStreamingTurnRequest(params);
 		logConvoDebug("openai.streamTurn.request", summarizeRequestForDebug(request, {
 			apiBaseUrl: this.config.baseUrl,
@@ -130,7 +138,9 @@ export class OpenAIClient {
 			inputItemCount: params.inputItems?.length ?? 0,
 			inputMode: params.messages ? "messages" : "input_items",
 		}));
-		const stream = this.client.responses.stream(request);
+		const stream = this.client.responses.stream(request, {
+			signal: options.signal,
+		});
 		let fullText = "";
 		const emittedMcpNoticeKeys = new Set<string>();
 
@@ -168,7 +178,7 @@ export class OpenAIClient {
 		};
 	}
 
-	async createTurn(params: CreateTurnParams): Promise<OpenAITurn> {
+	async createTurn(params: CreateTurnParams, options: OpenAIRequestOptions = {}): Promise<OpenAITurn> {
 		const request = this.buildNonStreamingTurnRequest(params);
 		logConvoDebug("openai.createTurn.request", summarizeRequestForDebug(request, {
 			apiBaseUrl: this.config.baseUrl,
@@ -176,7 +186,9 @@ export class OpenAIClient {
 			inputItemCount: params.inputItems?.length ?? 0,
 			inputMode: params.messages ? "messages" : "input_items",
 		}));
-		const response = await this.client.responses.create(request);
+		const response = await this.client.responses.create(request, {
+			signal: options.signal,
+		});
 		const toolCalls = extractFunctionToolCalls(response);
 		const mcpActivities = extractMcpActivities(response);
 		logConvoDebug("openai.createTurn.response", {

@@ -6,6 +6,7 @@ const MAX_FETCH_BODY_CHARS = 12000;
 export async function executeFetchToolCall(
 	argumentsJson: string,
 	fetchImpl: typeof fetch = createOpenAIFetchAdapter(),
+	signal?: AbortSignal,
 ): Promise<FetchToolResult> {
 	const parsed = parseFetchRequest(argumentsJson);
 	if (!parsed.success) {
@@ -20,6 +21,7 @@ export async function executeFetchToolCall(
 			method: parsed.data.method,
 			headers: normalizeRequestHeaders(parsed.data.headers),
 			body: parsed.data.body,
+			signal,
 		});
 		const rawBody = parsed.data.method === "HEAD" ? "" : await response.text();
 		const truncated = rawBody.length > MAX_FETCH_BODY_CHARS;
