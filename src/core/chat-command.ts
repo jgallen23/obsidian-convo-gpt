@@ -324,6 +324,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 								includeMarkdownFileTool: shouldUseMarkdownFileTool,
 								includeReferencedFileTool: shouldUseReferencedFileTool,
 								inputItems: continuation.inputItems,
+								instructions: continuation.instructions,
 								previousResponseId: continuation.previousResponseId,
 								toolChoice: continuation.toolChoice,
 							},
@@ -382,6 +383,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 						streamedResponse,
 						requestModelLabel,
 						requestStatus,
+						continuation.instructions,
 						{
 							includeFetchTool: shouldUseFetchTool,
 							includeMarkdownFileTool: shouldUseMarkdownFileTool,
@@ -691,6 +693,7 @@ interface ToolConversationState {
 }
 
 interface ToolConversationContinuation {
+	instructions?: string;
 	inputItems: NonNullable<CreateTurnParams["inputItems"]>;
 	previousResponseId: string;
 	roundsCompleted: number;
@@ -716,6 +719,7 @@ async function runToolConversation(
 	requestStatus: RequestStatusManager,
 	options: ToolConversationOptions,
 ): Promise<ToolConversationResult> {
+	const instructions = getSystemInstructions(messages);
 	logConvoDebug("chat.toolConversation.start", {
 		includeFetchTool: options.includeFetchTool,
 		includeMarkdownFileTool: options.includeMarkdownFileTool,
@@ -736,6 +740,7 @@ async function runToolConversation(
 		response,
 		model,
 		requestStatus,
+		instructions,
 		options,
 		{
 			didSaveLinkedDocument: false,
@@ -756,6 +761,7 @@ async function resumeToolConversation(
 	response: OpenAITurn,
 	model: string,
 	requestStatus: RequestStatusManager,
+	instructions: string | undefined,
 	options: ToolConversationOptions,
 	state: ToolConversationState,
 	startingRound: number,
@@ -964,6 +970,7 @@ async function resumeToolConversation(
 			return {
 				kind: "continue",
 				continuation: {
+					instructions,
 					inputItems: toolOutputs,
 					previousResponseId: response.responseId,
 					roundsCompleted: roundsCompleted + 1,
@@ -1021,10 +1028,21 @@ async function resumeToolConversation(
 			includeMarkdownFileTool: options.includeMarkdownFileTool,
 			includeReferencedFileTool: options.includeReferencedFileTool,
 			inputItems: toolOutputs,
+			instructions,
 			previousResponseId: response.responseId,
 			toolChoice: nextToolChoice,
 		}, { signal: options.signal, traceCollector: options.traceCollector, traceLabel: "OpenAI tool continuation turn" });
 	}
+}
+
+function getSystemInstructions(messages: ChatMessage[]): string | undefined {
+	const instructions = messages
+		.filter((message) => message.role === "system")
+		.map((message) => message.content.trim())
+		.filter((message) => message.length > 0)
+		.join("\n\n");
+
+	return instructions || undefined;
 }
 
 function formatToolConversationAppendix(state: ToolConversationState): string {

@@ -230,6 +230,8 @@ describe("runChatCommand", () => {
 
 		const secondTurn = createTurnMock.mock.calls[1]?.[0];
 		expect(secondTurn.inputItems).toHaveLength(1);
+		expect(secondTurn.instructions).toContain("Be concise.");
+		expect(secondTurn.instructions).toContain("Consult [[Style Guide]] before answering.");
 		expect(JSON.parse(secondTurn.inputItems[0].output)).toMatchObject({
 			status: "success",
 			path: "Agents/Style Guide.md",

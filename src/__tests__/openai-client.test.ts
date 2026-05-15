@@ -108,6 +108,32 @@ describe("OpenAI client request metadata", () => {
 		expect(request).not.toHaveProperty("temperature");
 	});
 
+	it("includes explicit instructions in continuation turn requests", () => {
+		const client = new OpenAIClient(buildConfig());
+		const request = (
+			client as unknown as {
+				buildNonStreamingTurnRequest: (params: {
+					inputItems: Array<{ type: string; call_id: string; output: string }>;
+					instructions: string;
+					previousResponseId: string;
+				}) => Record<string, unknown>;
+			}
+		).buildNonStreamingTurnRequest({
+			inputItems: [
+				{
+					type: "function_call_output",
+					call_id: "call_1",
+					output: "{\"status\":\"success\"}",
+				},
+			],
+			instructions: "Keep asking discovery questions before drafting a brief.",
+			previousResponseId: "resp_prev",
+		});
+
+		expect(request.instructions).toBe("Keep asking discovery questions before drafting a brief.");
+		expect(request.previous_response_id).toBe("resp_prev");
+	});
+
 	it("passes an abort signal to non-streaming requests", async () => {
 		const client = new OpenAIClient(buildConfig());
 		const signal = new AbortController().signal;

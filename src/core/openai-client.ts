@@ -56,6 +56,7 @@ export interface CreateTurnParams {
 	includeMarkdownFileTool?: boolean;
 	includeReferencedFileTool?: boolean;
 	inputItems?: ResponseInputItem[];
+	instructions?: string;
 	messages?: ChatMessage[];
 	previousResponseId?: string;
 	toolChoice?: ResponseCreateParamsBase["tool_choice"];
@@ -291,6 +292,7 @@ export class OpenAIClient {
 	private buildTurnRequestBase(params: CreateTurnParams): ResponseCreateParamsBase {
 		const normalizedModel = normalizeModelId(this.config.model);
 		const tools: NonNullable<ResponseCreateParamsBase["tools"]> = [...this.buildProviderTools(normalizedModel)];
+		const explicitInstructions = params.instructions?.trim() || undefined;
 
 		if (params.includeFetchTool) {
 			tools.push(getFetchToolDefinition());
@@ -318,7 +320,7 @@ export class OpenAIClient {
 			return {
 				model: normalizedModel,
 				input: history,
-				instructions: systemMessages.map((message) => message.content).join("\n\n") || undefined,
+				instructions: explicitInstructions ?? (systemMessages.map((message) => message.content).join("\n\n") || undefined),
 				metadata: OPENAI_REQUEST_METADATA,
 				max_output_tokens: this.config.max_tokens,
 				...(this.config.reasoning_effort !== "none"
@@ -338,6 +340,7 @@ export class OpenAIClient {
 		return {
 			model: normalizedModel,
 			input: params.inputItems ?? [],
+			instructions: explicitInstructions,
 			metadata: OPENAI_REQUEST_METADATA,
 			previous_response_id: params.previousResponseId,
 			max_output_tokens: this.config.max_tokens,
