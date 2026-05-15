@@ -11,6 +11,7 @@ export interface RequestStatusManager {
 	notifyRequestStart(text: string): void;
 	notifyToolUse(text: string): void;
 	setCalling(model: string): void;
+	setWaitingForContinueApproval(): void;
 	setWaitingForRenameApproval(): void;
 	setSaving(path: string): void;
 	setStreaming(model: string): void;
@@ -48,6 +49,10 @@ export class PluginRequestStatusManager implements RequestStatusManager {
 
 	setWaitingForRenameApproval(): void {
 		this.setDesktopText("Waiting for rename approval");
+	}
+
+	setWaitingForContinueApproval(): void {
+		this.setDesktopText("Waiting for continue approval");
 	}
 
 	setSaving(path: string): void {

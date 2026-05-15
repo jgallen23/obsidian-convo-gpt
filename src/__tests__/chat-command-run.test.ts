@@ -64,6 +64,7 @@ import type { AgentDefinition, PluginSettings } from "../core/types";
 
 const {
 	resolveAgentMock,
+	requestToolRoundLimitApprovalMock,
 	executeFetchToolCallMock,
 	executeMarkdownWriteToolCallMock,
 	createTurnMock,
@@ -72,6 +73,7 @@ const {
 	streamTurnMock,
 } = vi.hoisted(() => ({
 	resolveAgentMock: vi.fn<() => Promise<AgentDefinition | null>>(),
+	requestToolRoundLimitApprovalMock: vi.fn(),
 	executeFetchToolCallMock: vi.fn(),
 	executeMarkdownWriteToolCallMock: vi.fn(),
 	createTurnMock: vi.fn(),
@@ -82,6 +84,10 @@ const {
 
 vi.mock("../core/agent-resolver", () => ({
 	resolveAgent: resolveAgentMock,
+}));
+
+vi.mock("../core/tool-round-limit-approval", () => ({
+	requestToolRoundLimitApproval: requestToolRoundLimitApprovalMock,
 }));
 
 vi.mock("../core/markdown-file-service", async () => {
@@ -149,6 +155,8 @@ describe("runChatCommand", () => {
 			message: "Appended markdown content to Stories/story.md.",
 		});
 		createTurnMock.mockReset();
+		requestToolRoundLimitApprovalMock.mockReset();
+		requestToolRoundLimitApprovalMock.mockResolvedValue("stop");
 		createMock.mockReset();
 		streamMock.mockReset();
 		streamTurnMock.mockReset();
@@ -1542,6 +1550,98 @@ Make it shorter.`) as never,
 		expect(requestStatus.clear).toHaveBeenCalled();
 	});
 
+	it("prompts to stop when the tool round limit is reached and returns a stop message", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const briefFile = createFile("Docs/Brief.md");
+
+		createTurnMock
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_1", "call_1", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_2", "call_2", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_3", "call_3", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_4", "call_4", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_5", "call_5", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_6", "call_6", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_7", "call_7", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_8", "call_8", "Brief"));
+
+		requestToolRoundLimitApprovalMock.mockResolvedValueOnce("stop");
+		const requestStatus = buildRequestStatus();
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"Brief|Notes/Chat.md": briefFile,
+				},
+				{
+					"Docs/Brief.md": "Short brief.",
+				},
+			) as never,
+			editor: createEditor("# _You (1)_\n\nKeep reading [[Brief]].") as never,
+			requestStatus,
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(requestToolRoundLimitApprovalMock).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				maxRounds: 8,
+				roundsCompleted: 8,
+			}),
+			expect.any(AbortSignal),
+		);
+		expect(requestStatus.setWaitingForContinueApproval).toHaveBeenCalled();
+		expect(createTurnMock).toHaveBeenCalledTimes(8);
+	});
+
+	it("can continue after the tool round limit prompt", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const briefFile = createFile("Docs/Brief.md");
+
+		createTurnMock
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_1", "call_1", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_2", "call_2", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_3", "call_3", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_4", "call_4", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_5", "call_5", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_6", "call_6", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_7", "call_7", "Brief"))
+			.mockResolvedValueOnce(buildReferencedReadToolTurn("resp_8", "call_8", "Brief"))
+			.mockResolvedValueOnce({
+				responseId: "resp_9",
+				text: "Final answer after continuing.",
+				sourcesAppendix: "",
+				toolCalls: [],
+				mcpNotices: [],
+				hitMaxOutputTokens: false,
+			});
+
+		requestToolRoundLimitApprovalMock.mockResolvedValueOnce("continue");
+
+		const editor = createEditor("# _You (1)_\n\nKeep reading [[Brief]].");
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"Brief|Notes/Chat.md": briefFile,
+				},
+				{
+					"Docs/Brief.md": "Short brief.",
+				},
+			) as never,
+			editor: editor as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(requestToolRoundLimitApprovalMock).toHaveBeenCalledTimes(1);
+		expect(createTurnMock).toHaveBeenCalledTimes(9);
+		expect(editor.getValue()).toContain("Final answer after continuing.");
+	});
+
 	it("appends ai_log traces with raw requests, responses, and tool results", async () => {
 		const noteFile = createFile("Notes/Chat.md");
 		const briefFile = createFile("Docs/Brief.md");
@@ -1684,6 +1784,7 @@ function buildRequestStatus() {
 		notifyRequestStart: vi.fn(),
 		notifyToolUse: vi.fn(),
 		setCalling: vi.fn(),
+		setWaitingForContinueApproval: vi.fn(),
 		setWaitingForRenameApproval: vi.fn(),
 		setSaving: vi.fn(),
 		setStreaming: vi.fn(),
@@ -1725,4 +1826,22 @@ function createFile(path: string, options: { size?: number } = {}): TFile {
 		},
 	});
 	return file;
+}
+
+function buildReferencedReadToolTurn(responseId: string, callId: string, reference: string) {
+	return {
+		responseId,
+		text: "",
+		sourcesAppendix: "",
+		toolCalls: [
+			{
+				type: "function_call",
+				call_id: callId,
+				name: "read_referenced_file",
+				arguments: JSON.stringify({ reference }),
+			},
+		],
+		mcpNotices: [],
+		hitMaxOutputTokens: false,
+	};
 }

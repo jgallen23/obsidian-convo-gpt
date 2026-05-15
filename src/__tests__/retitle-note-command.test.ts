@@ -242,6 +242,7 @@ function buildRequestStatus() {
 		notifyRequestStart: vi.fn(),
 		notifyToolUse: vi.fn(),
 		setCalling: vi.fn(),
+		setWaitingForContinueApproval: vi.fn(),
 		setWaitingForRenameApproval: vi.fn(),
 		setSaving: vi.fn(),
 		setStreaming: vi.fn(),

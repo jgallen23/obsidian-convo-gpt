@@ -62,6 +62,7 @@ import {
 	type ReferencedFileSectionSummary,
 	type ReferencedFileReadToolResult,
 } from "./referenced-file-tool";
+import { requestToolRoundLimitApproval } from "./tool-round-limit-approval";
 import { isGeneratedChatBasename } from "./note-title";
 import { shouldShowTopOfAnswerLink } from "./response-length";
 import { parseSections } from "./message-parser";
@@ -759,13 +760,16 @@ async function resumeToolConversation(
 	state: ToolConversationState,
 	startingRound: number,
 ): Promise<ToolConversationResult> {
-	for (let round = startingRound; round < MAX_MARKDOWN_TOOL_ROUNDS; round += 1) {
+	let roundsCompleted = startingRound;
+	let maxRoundsBeforePrompt = MAX_MARKDOWN_TOOL_ROUNDS;
+
+	while (true) {
 		state.hitMaxOutputTokens = state.hitMaxOutputTokens || response.hitMaxOutputTokens;
 		for (const notice of response.mcpNotices ?? []) {
 			options.onMcpNotice?.(notice);
 		}
 		logConvoDebug("chat.toolConversation.round", {
-			round: round + 1,
+			round: roundsCompleted + 1,
 			responseId: response.responseId,
 			toolCallNames: response.toolCalls.map((toolCall) => toolCall.name),
 			didSaveLinkedDocument: state.didSaveLinkedDocument,
@@ -962,12 +966,51 @@ async function resumeToolConversation(
 				continuation: {
 					inputItems: toolOutputs,
 					previousResponseId: response.responseId,
-					roundsCompleted: round + 1,
+					roundsCompleted: roundsCompleted + 1,
 					state,
 					toolChoice: nextToolChoice,
 				},
 			};
 		}
+
+		roundsCompleted += 1;
+		if (roundsCompleted >= maxRoundsBeforePrompt) {
+			requestStatus.setWaitingForContinueApproval();
+			const decision = await requestToolRoundLimitApproval(
+				app,
+				{
+					maxRounds: MAX_MARKDOWN_TOOL_ROUNDS,
+					roundsCompleted,
+				},
+				options.signal,
+			);
+			options.traceCollector?.recordEvent("Tool round limit decision", {
+				decision,
+				maxRounds: MAX_MARKDOWN_TOOL_ROUNDS,
+				roundsCompleted,
+			});
+			logConvoDebug("chat.toolConversation.roundLimitDecision", {
+				decision,
+				roundsCompleted,
+				maxRounds: MAX_MARKDOWN_TOOL_ROUNDS,
+			});
+
+			if (decision === "stop") {
+				return {
+					kind: "completion",
+					completion: {
+						text: "_Stopped after reaching the tool round limit before the model produced a final answer._",
+						sourcesAppendix: formatToolConversationAppendix(state),
+						hitMaxOutputTokens: state.hitMaxOutputTokens,
+						mcpNotices: [],
+					},
+				};
+			}
+
+			maxRoundsBeforePrompt += MAX_MARKDOWN_TOOL_ROUNDS;
+			requestStatus.setCalling(model);
+		}
+
 		logConvoDebug("chat.toolConversation.nextTurn", {
 			previousResponseId: response.responseId,
 			toolOutputCount: toolOutputs.length,
@@ -982,12 +1025,6 @@ async function resumeToolConversation(
 			toolChoice: nextToolChoice,
 		}, { signal: options.signal, traceCollector: options.traceCollector, traceLabel: "OpenAI tool continuation turn" });
 	}
-
-	logConvoDebug("chat.toolConversation.roundLimitExceeded", {
-		linkedDocumentPath: options.linkedDocument?.path ?? null,
-		requireLinkedDocumentSave: options.requireLinkedDocumentSave ?? false,
-	});
-	throw new Error("Convo GPT exceeded the markdown file tool round limit.");
 }
 
 function formatToolConversationAppendix(state: ToolConversationState): string {

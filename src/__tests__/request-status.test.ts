@@ -14,6 +14,7 @@ describe("PluginRequestStatusManager", () => {
 		manager.notifyRequestStart("Calling openai@gpt-5.4");
 		manager.setCalling("openai@gpt-5.4");
 		manager.setWaitingForRenameApproval();
+		manager.setWaitingForContinueApproval();
 		manager.setStreaming("openai@gpt-5.4");
 		manager.setWebSearch();
 		manager.setWaitingForFileApproval();
@@ -23,11 +24,12 @@ describe("PluginRequestStatusManager", () => {
 
 		expect(setText).toHaveBeenNthCalledWith(1, "Calling openai@gpt-5.4");
 		expect(setText).toHaveBeenNthCalledWith(2, "Waiting for rename approval");
-		expect(setText).toHaveBeenNthCalledWith(3, "Streaming openai@gpt-5.4");
-		expect(setText).toHaveBeenNthCalledWith(4, "Searching the web");
-		expect(setText).toHaveBeenNthCalledWith(5, "Waiting for file approval");
-		expect(setText).toHaveBeenNthCalledWith(6, "Saving to story.md");
-		expect(setText).toHaveBeenNthCalledWith(7, "");
+		expect(setText).toHaveBeenNthCalledWith(3, "Waiting for continue approval");
+		expect(setText).toHaveBeenNthCalledWith(4, "Streaming openai@gpt-5.4");
+		expect(setText).toHaveBeenNthCalledWith(5, "Searching the web");
+		expect(setText).toHaveBeenNthCalledWith(6, "Waiting for file approval");
+		expect(setText).toHaveBeenNthCalledWith(7, "Saving to story.md");
+		expect(setText).toHaveBeenNthCalledWith(8, "");
 		expect(createNotice).toHaveBeenNthCalledWith(1, "Convo GPT: Calling openai@gpt-5.4", 0);
 		expect(createNotice).toHaveBeenNthCalledWith(2, "Convo GPT: Using web search");
 		expect(hidePersistentNotice).toHaveBeenCalledTimes(1);
