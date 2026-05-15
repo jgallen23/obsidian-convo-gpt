@@ -1,8 +1,10 @@
 import type { App, Editor, MarkdownView } from "obsidian";
 import { isConvoAbortError, PluginActiveRequestManager, waitForCancelable, type ActiveRequestManager } from "./active-request-manager";
 import { resolveAgent } from "./agent-resolver";
+import { AITraceCollector, appendAITraceLog } from "./ai-trace";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
+import { logConvoDebug } from "./debug-log";
 import { parseNoteDocument } from "./frontmatter";
 import { OpenAIClient } from "./openai-client";
 import { formatRequestModelLabel } from "./request-label";
@@ -40,6 +42,18 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 
 	const agent = await resolveAgent(app, settings, document.overrides.agent);
 	const config = resolveChatConfig(settings, agent?.frontmatter, document.overrides);
+	const aiTrace = config.ai_log
+		? new AITraceCollector({
+				aiLogPath: config.ai_log,
+				maxTokens: config.max_tokens,
+				model: config.model,
+				notePath: file.path,
+				operation: "retitle",
+				reasoningEffort: config.reasoning_effort,
+				stream: config.stream,
+				temperature: config.temperature,
+			})
+		: null;
 	if (!config.apiKey) {
 		notify("Convo GPT is missing an OpenAI API key.");
 		return;
@@ -78,6 +92,8 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 			defaultSystemPrompt: config.defaultSystemPrompt,
 			systemCommands: config.system_commands,
 			signal: activeRequest.signal,
+			traceCollector: aiTrace ?? undefined,
+			traceLabel: "OpenAI retitle create",
 		});
 		const nextPath = buildSiblingMarkdownPath(file.path, nextBasename);
 
@@ -91,23 +107,44 @@ export async function runRetitleNoteCommand(context: RetitleNoteCommandContext):
 			currentBasename: file.basename,
 			nextBasename,
 		}, activeRequest.signal), activeRequest.signal);
+		aiTrace?.recordEvent("Retitle approval", {
+			approved,
+			currentBasename: file.basename,
+			nextBasename,
+		});
 		if (!approved) {
 			notify("Convo GPT rename canceled.");
+			aiTrace?.setOutcome("success");
 			return;
 		}
 
 		await app.fileManager.renameFile(file, nextPath);
+		aiTrace?.setOutcome("success");
 		notify(`Convo GPT renamed note to ${nextBasename}`);
 	} catch (error) {
 		if (isConvoAbortError(error)) {
+			aiTrace?.setOutcome("canceled", error instanceof Error ? error.message : String(error));
 			return;
 		}
 
 		const message = error instanceof Error ? error.message : String(error);
+		aiTrace?.setOutcome("failed", message);
 		notify(`Convo GPT request failed: ${message}`);
 	} finally {
 		requestStatus.clear();
 		activeRequest.finish();
+		if (aiTrace) {
+			try {
+				await appendAITraceLog(app, file.path, aiTrace, file.path);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				logConvoDebug("retitle.aiTrace.flushFailed", {
+					notePath: file.path,
+					error: message,
+				});
+				notify(`Convo GPT ai_log failed: ${message}`);
+			}
+		}
 	}
 }
 

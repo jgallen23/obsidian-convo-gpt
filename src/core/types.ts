@@ -21,6 +21,7 @@ export interface NoteOverrides {
 	max_tokens?: number;
 	stream?: boolean;
 	agent?: string;
+	ai_log?: string;
 	document?: string;
 	system_commands?: string[];
 	mcp_servers?: string[];
@@ -68,6 +69,7 @@ export interface ResolvedChatConfig {
 	max_tokens: number;
 	stream: boolean;
 	agent?: string;
+	ai_log?: string;
 	system_commands: string[];
 	openai_native_web_search: boolean;
 	defaultSystemPrompt: string;

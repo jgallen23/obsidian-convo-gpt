@@ -131,6 +131,7 @@ const noteOverridesSchema = z
 		max_tokens: positiveIntSchema.optional(),
 		stream: booleanSchema.optional(),
 		agent: optionalTrimmedStringSchema,
+		ai_log: optionalTrimmedStringSchema,
 		document: optionalTrimmedStringSchema,
 		system_commands: stringArraySchema.optional(),
 		mcp_servers: optionalStringArraySchema,

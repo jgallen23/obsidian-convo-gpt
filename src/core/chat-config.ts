@@ -28,6 +28,7 @@ export function resolveChatConfig(
 		max_tokens: noteOverrides.max_tokens ?? agentOverrides?.max_tokens ?? settings.defaultMaxTokens,
 		stream: noteOverrides.stream ?? agentOverrides?.stream ?? settings.stream,
 		agent: noteOverrides.agent || agentOverrides?.agent,
+		ai_log: noteOverrides.ai_log || agentOverrides?.ai_log,
 		system_commands: systemCommands,
 		openai_native_web_search:
 			noteOverrides.openai_native_web_search ??

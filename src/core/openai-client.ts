@@ -26,6 +26,7 @@ import {
 	getReferencedFileSectionToolDefinition,
 	getReferencedFileToolDefinition,
 } from "./referenced-file-tool";
+import type { AITraceCollector } from "./ai-trace";
 import { createOpenAIFetchAdapter } from "./openai-fetch";
 import { logConvoDebug } from "./debug-log";
 import type { ChatMessage, ResolvedChatConfig } from "./types";
@@ -68,6 +69,8 @@ export interface StreamCallbacks {
 
 export interface OpenAIRequestOptions {
 	signal?: AbortSignal;
+	traceCollector?: AITraceCollector;
+	traceLabel?: string;
 }
 
 export class OpenAIClient {
@@ -86,19 +89,27 @@ export class OpenAIClient {
 
 	async create(messages: ChatMessage[], options: OpenAIRequestOptions = {}): Promise<OpenAICompletion> {
 		const request = this.buildNonStreamingRequest(messages);
+		options.traceCollector?.recordRequest(options.traceLabel ?? "OpenAI create request", request);
 		logConvoDebug("openai.create.request", summarizeRequestForDebug(request, {
 			apiBaseUrl: this.config.baseUrl,
 			messageCount: messages.length,
 			inputMode: "messages",
 		}));
-		const response = await this.client.responses.create(request, {
-			signal: options.signal,
-		});
-		return this.parseCompletion(response);
+		try {
+			const response = await this.client.responses.create(request, {
+				signal: options.signal,
+			});
+			options.traceCollector?.recordResponse(options.traceLabel ?? "OpenAI create response", response);
+			return this.parseCompletion(response, "", undefined, options.traceCollector);
+		} catch (error) {
+			options.traceCollector?.recordError(options.traceLabel ?? "OpenAI create error", error);
+			throw error;
+		}
 	}
 
 	async stream(messages: ChatMessage[], callbacks: StreamCallbacks, options: OpenAIRequestOptions = {}): Promise<OpenAICompletion> {
 		const request = this.buildStreamingRequest(messages);
+		options.traceCollector?.recordRequest(options.traceLabel ?? "OpenAI stream request", request);
 		logConvoDebug("openai.stream.request", summarizeRequestForDebug(request, {
 			apiBaseUrl: this.config.baseUrl,
 			messageCount: messages.length,
@@ -110,28 +121,37 @@ export class OpenAIClient {
 		let fullText = "";
 		const emittedMcpNoticeKeys = new Set<string>();
 
-		for await (const event of stream) {
-			if (event.type === "response.web_search_call.searching") {
-				callbacks.onSearchStart?.();
-			}
+		try {
+			for await (const event of stream) {
+				if (event.type === "response.web_search_call.searching") {
+					callbacks.onSearchStart?.();
+				}
 
-			if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
-				emitMcpActivitiesFromItem(event.item, emittedMcpNoticeKeys, callbacks);
-			}
+				if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
+					emitMcpActivitiesFromItem(event.item, emittedMcpNoticeKeys, callbacks, options.traceCollector);
+				}
 
-			if (event.type === "response.output_text.delta") {
-				fullText += event.delta;
-				callbacks.onText(event.delta);
+				if (event.type === "response.output_text.delta") {
+					fullText += event.delta;
+					callbacks.onText(event.delta);
+				}
 			}
+			const finalResponse = await stream.finalResponse();
+			options.traceCollector?.recordResponse(options.traceLabel ?? "OpenAI stream final response", finalResponse);
+			const parsed = this.parseCompletion(finalResponse, fullText, emittedMcpNoticeKeys, options.traceCollector);
+			return parsed;
+		} catch (error) {
+			options.traceCollector?.recordError(options.traceLabel ?? "OpenAI stream error", {
+				error,
+				partialText: fullText,
+			});
+			throw error;
 		}
-
-		const finalResponse = await stream.finalResponse();
-		const parsed = this.parseCompletion(finalResponse, fullText, emittedMcpNoticeKeys);
-		return parsed;
 	}
 
 	async streamTurn(params: CreateTurnParams, callbacks: StreamCallbacks, options: OpenAIRequestOptions = {}): Promise<OpenAITurn> {
 		const request = this.buildStreamingTurnRequest(params);
+		options.traceCollector?.recordRequest(options.traceLabel ?? "OpenAI streamTurn request", request);
 		logConvoDebug("openai.streamTurn.request", summarizeRequestForDebug(request, {
 			apiBaseUrl: this.config.baseUrl,
 			messageCount: params.messages?.length ?? null,
@@ -144,73 +164,94 @@ export class OpenAIClient {
 		let fullText = "";
 		const emittedMcpNoticeKeys = new Set<string>();
 
-		for await (const event of stream) {
-			if (event.type === "response.web_search_call.searching") {
-				callbacks.onSearchStart?.();
-			}
+		try {
+			for await (const event of stream) {
+				if (event.type === "response.web_search_call.searching") {
+					callbacks.onSearchStart?.();
+				}
 
-			if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
-				emitMcpActivitiesFromItem(event.item, emittedMcpNoticeKeys, callbacks);
-			}
+				if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
+					emitMcpActivitiesFromItem(event.item, emittedMcpNoticeKeys, callbacks, options.traceCollector);
+				}
 
-			if (event.type === "response.output_text.delta") {
-				fullText += event.delta;
-				callbacks.onText(event.delta);
+				if (event.type === "response.output_text.delta") {
+					fullText += event.delta;
+					callbacks.onText(event.delta);
+				}
 			}
-		}
-
-		const finalResponse = await stream.finalResponse();
-		const toolCalls = extractFunctionToolCalls(finalResponse);
-		const mcpActivities = extractMcpActivities(finalResponse).filter((activity) => !emittedMcpNoticeKeys.has(activity.key));
-		if (mcpActivities.length > 0) {
-			logConvoDebug("openai.streamTurn.response.mcp", {
+			const finalResponse = await stream.finalResponse();
+			options.traceCollector?.recordResponse(options.traceLabel ?? "OpenAI streamTurn final response", finalResponse);
+			const toolCalls = extractFunctionToolCalls(finalResponse);
+			const mcpActivities = extractMcpActivities(finalResponse).filter((activity) => !emittedMcpNoticeKeys.has(activity.key));
+			if (mcpActivities.length > 0) {
+				logConvoDebug("openai.streamTurn.response.mcp", {
+					responseId: finalResponse.id,
+					activities: mcpActivities.map((activity) => activity.details),
+				});
+				for (const activity of mcpActivities) {
+					options.traceCollector?.recordMcpActivity(activity.text, activity.details);
+				}
+			}
+			return {
 				responseId: finalResponse.id,
-				activities: mcpActivities.map((activity) => activity.details),
+				text: fullText || extractText(finalResponse),
+				sourcesAppendix: formatWebSearchSources(extractResponseSources(finalResponse)),
+				toolCalls,
+				mcpNotices: mcpActivities.map((activity) => activity.text),
+				hitMaxOutputTokens: didHitMaxOutputTokens(finalResponse),
+			};
+		} catch (error) {
+			options.traceCollector?.recordError(options.traceLabel ?? "OpenAI streamTurn error", {
+				error,
+				partialText: fullText,
 			});
+			throw error;
 		}
-		return {
-			responseId: finalResponse.id,
-			text: fullText || extractText(finalResponse),
-			sourcesAppendix: formatWebSearchSources(extractResponseSources(finalResponse)),
-			toolCalls,
-			mcpNotices: mcpActivities.map((activity) => activity.text),
-			hitMaxOutputTokens: didHitMaxOutputTokens(finalResponse),
-		};
 	}
 
 	async createTurn(params: CreateTurnParams, options: OpenAIRequestOptions = {}): Promise<OpenAITurn> {
 		const request = this.buildNonStreamingTurnRequest(params);
+		options.traceCollector?.recordRequest(options.traceLabel ?? "OpenAI createTurn request", request);
 		logConvoDebug("openai.createTurn.request", summarizeRequestForDebug(request, {
 			apiBaseUrl: this.config.baseUrl,
 			messageCount: params.messages?.length ?? null,
 			inputItemCount: params.inputItems?.length ?? 0,
 			inputMode: params.messages ? "messages" : "input_items",
 		}));
-		const response = await this.client.responses.create(request, {
-			signal: options.signal,
-		});
-		const toolCalls = extractFunctionToolCalls(response);
-		const mcpActivities = extractMcpActivities(response);
-		logConvoDebug("openai.createTurn.response", {
-			responseId: response.id,
-			toolCallNames: toolCalls.map((toolCall) => toolCall.name),
-			textLength: extractText(response).length,
-			mcpActivityCount: mcpActivities.length,
-		});
-		if (mcpActivities.length > 0) {
-			logConvoDebug("openai.createTurn.response.mcp", {
-				responseId: response.id,
-				activities: mcpActivities.map((activity) => activity.details),
+		try {
+			const response = await this.client.responses.create(request, {
+				signal: options.signal,
 			});
+			options.traceCollector?.recordResponse(options.traceLabel ?? "OpenAI createTurn response", response);
+			const toolCalls = extractFunctionToolCalls(response);
+			const mcpActivities = extractMcpActivities(response);
+			logConvoDebug("openai.createTurn.response", {
+				responseId: response.id,
+				toolCallNames: toolCalls.map((toolCall) => toolCall.name),
+				textLength: extractText(response).length,
+				mcpActivityCount: mcpActivities.length,
+			});
+			if (mcpActivities.length > 0) {
+				logConvoDebug("openai.createTurn.response.mcp", {
+					responseId: response.id,
+					activities: mcpActivities.map((activity) => activity.details),
+				});
+				for (const activity of mcpActivities) {
+					options.traceCollector?.recordMcpActivity(activity.text, activity.details);
+				}
+			}
+			return {
+				responseId: response.id,
+				text: extractText(response),
+				sourcesAppendix: formatWebSearchSources(extractResponseSources(response)),
+				toolCalls,
+				mcpNotices: mcpActivities.map((activity) => activity.text),
+				hitMaxOutputTokens: didHitMaxOutputTokens(response),
+			};
+		} catch (error) {
+			options.traceCollector?.recordError(options.traceLabel ?? "OpenAI createTurn error", error);
+			throw error;
 		}
-		return {
-			responseId: response.id,
-			text: extractText(response),
-			sourcesAppendix: formatWebSearchSources(extractResponseSources(response)),
-			toolCalls,
-			mcpNotices: mcpActivities.map((activity) => activity.text),
-			hitMaxOutputTokens: didHitMaxOutputTokens(response),
-		};
 	}
 
 	private buildBaseRequest(messages: ChatMessage[]): ResponseCreateParamsBase {
@@ -372,7 +413,12 @@ export class OpenAIClient {
 		};
 	}
 
-	private parseCompletion(response: unknown, streamedText = "", emittedMcpNoticeKeys?: Set<string>): OpenAICompletion {
+	private parseCompletion(
+		response: unknown,
+		streamedText = "",
+		emittedMcpNoticeKeys?: Set<string>,
+		traceCollector?: AITraceCollector,
+	): OpenAICompletion {
 		const text = streamedText || extractText(response);
 		const sourcesAppendix = formatWebSearchSources(extractResponseSources(response));
 		const mcpActivities = extractMcpActivities(response).filter((activity) => !emittedMcpNoticeKeys?.has(activity.key));
@@ -380,6 +426,9 @@ export class OpenAIClient {
 			logConvoDebug("openai.response.mcp", {
 				activities: mcpActivities.map((activity) => activity.details),
 			});
+			for (const activity of mcpActivities) {
+				traceCollector?.recordMcpActivity(activity.text, activity.details);
+			}
 		}
 
 		return {
@@ -437,7 +486,12 @@ interface McpActivityEntry {
 	details: Record<string, unknown>;
 }
 
-function emitMcpActivitiesFromItem(item: unknown, emittedKeys: Set<string>, callbacks: StreamCallbacks): void {
+function emitMcpActivitiesFromItem(
+	item: unknown,
+	emittedKeys: Set<string>,
+	callbacks: StreamCallbacks,
+	traceCollector?: AITraceCollector,
+): void {
 	for (const activity of extractMcpActivitiesFromItem(item)) {
 		if (emittedKeys.has(activity.key)) {
 			continue;
@@ -445,6 +499,7 @@ function emitMcpActivitiesFromItem(item: unknown, emittedKeys: Set<string>, call
 
 		emittedKeys.add(activity.key);
 		logConvoDebug(activity.event, activity.details);
+		traceCollector?.recordMcpActivity(activity.text, activity.details);
 		callbacks.onToolUse?.(activity.text);
 	}
 }

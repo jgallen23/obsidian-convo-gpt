@@ -57,7 +57,7 @@ vi.mock(
 	},
 );
 
-import { TFile } from "obsidian";
+import { TFile, TFolder } from "obsidian";
 import { PluginActiveRequestManager } from "../core/active-request-manager";
 import { runChatCommand } from "../core/chat-command";
 import type { AgentDefinition, PluginSettings } from "../core/types";
@@ -1540,9 +1540,64 @@ Make it shorter.`) as never,
 		expect(requestStatus.clear).toHaveBeenCalled();
 	});
 
+	it("appends ai_log traces with raw requests, responses, and tool results", async () => {
+		const noteFile = createFile("Notes/Chat.md");
+		const briefFile = createFile("Docs/Brief.md");
+		const fileContents: Record<string, string> = {
+			"Docs/Brief.md": "Short brief.",
+		};
+
+		createTurnMock
+			.mockResolvedValueOnce({
+				responseId: "resp_1",
+				text: "",
+				sourcesAppendix: "",
+				toolCalls: [
+					{
+						type: "function_call",
+						call_id: "call_read",
+						name: "read_referenced_file",
+						arguments: JSON.stringify({ reference: "Brief" }),
+					},
+				],
+				mcpNotices: [],
+				hitMaxOutputTokens: false,
+			})
+			.mockResolvedValueOnce({
+				responseId: "resp_2",
+				text: "Final answer.",
+				sourcesAppendix: "",
+				toolCalls: [],
+				mcpNotices: ["Using MCP server: weather", "Using MCP tool: weather.get_forecast"],
+				hitMaxOutputTokens: false,
+			});
+
+		await runChatCommand({
+			app: buildApp(
+				noteFile,
+				{
+					"Brief|Notes/Chat.md": briefFile,
+				},
+				fileContents,
+			) as never,
+			editor: createEditor("---\nai_log: Logs/ai-log.md\n---\n# _You (1)_\n\nRead [[Brief]] and answer.") as never,
+			requestStatus: buildRequestStatus(),
+			settings: buildSettings({ stream: false }),
+			view: { file: noteFile } as never,
+		});
+
+		expect(fileContents["Logs/ai-log.md"]).toContain("Tool call: read_referenced_file");
+		expect(fileContents["Logs/ai-log.md"]).toContain("Tool result: read_referenced_file");
+		expect(fileContents["Logs/ai-log.md"]).toContain("- Source note: [[Notes/Chat]]");
+		expect(fileContents["Logs/ai-log.md"]).toContain("Outcome: `success`");
+	});
+
 });
 
 function buildApp(noteFile: TFile, linkMap: Record<string, TFile>, fileContents: Record<string, string>) {
+	const createdFiles = new Map<string, TFile>();
+	const createdFolders = new Set<string>();
+
 	return {
 		metadataCache: {
 			getFirstLinkpathDest: (path: string, currentPath: string) => linkMap[`${path}|${currentPath}`] ?? null,
@@ -1552,10 +1607,46 @@ function buildApp(noteFile: TFile, linkMap: Record<string, TFile>, fileContents:
 				if (path === noteFile.path) {
 					return noteFile;
 				}
+				if (createdFolders.has(path)) {
+					const folder = Object.create(TFolder.prototype) as TFolder;
+					Object.assign(folder, {
+						path,
+						name: path.split("/").at(-1) ?? path,
+						children: [],
+					});
+					return folder;
+				}
+				const created = createdFiles.get(path);
+				if (created) {
+					return created;
+				}
+				if (fileContents[path] !== undefined) {
+					const existing = createFile(path, { size: fileContents[path].length });
+					createdFiles.set(path, existing);
+					return existing;
+				}
 				return Object.values(linkMap).find((file) => file.path === path) ?? null;
 			},
 			cachedRead: async (file: TFile) => fileContents[file.path] ?? "",
 			read: async (file: TFile) => fileContents[file.path] ?? "",
+			createFolder: async (path: string) => {
+				createdFolders.add(path);
+			},
+			create: async (path: string, content: string) => {
+				fileContents[path] = content;
+				const file = createFile(path, { size: content.length });
+				createdFiles.set(path, file);
+				return file;
+			},
+			modify: async (file: TFile, content: string) => {
+				fileContents[file.path] = content;
+				file.stat.size = content.length;
+			},
+			process: async (file: TFile, updater: (content: string) => string) => {
+				const next = updater(fileContents[file.path] ?? "");
+				fileContents[file.path] = next;
+				file.stat.size = next.length;
+			},
 		},
 	};
 }

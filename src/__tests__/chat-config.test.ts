@@ -67,6 +67,11 @@ describe("resolveChatConfig", () => {
 		).toBe("none");
 	});
 
+	it("uses note ai_log before the agent ai_log", () => {
+		expect(resolveChatConfig(buildSettings(), { ai_log: "Logs/agent.md" }, {}).ai_log).toBe("Logs/agent.md");
+		expect(resolveChatConfig(buildSettings(), { ai_log: "Logs/agent.md" }, { ai_log: "Logs/note.md" }).ai_log).toBe("Logs/note.md");
+	});
+
 	it("treats null temperature in note or agent overrides as explicitly omitting temperature", () => {
 		expect(resolveChatConfig(buildSettings({ defaultTemperature: 0.2 }), undefined, { temperature: null }).temperature).toBeUndefined();
 		expect(

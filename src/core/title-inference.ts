@@ -1,8 +1,12 @@
 import { buildRetitledBasename } from "./note-title";
+import type { AITraceCollector } from "./ai-trace";
 import type { ChatMessage } from "./types";
 
 interface TitleInferenceClient {
-	create(messages: ChatMessage[], options?: { signal?: AbortSignal }): Promise<{ text: string }>;
+	create(
+		messages: ChatMessage[],
+		options?: { signal?: AbortSignal; traceCollector?: AITraceCollector; traceLabel?: string },
+	): Promise<{ text: string }>;
 }
 
 interface InferRetitledBasenameParams {
@@ -12,6 +16,8 @@ interface InferRetitledBasenameParams {
 	defaultSystemPrompt: string;
 	systemCommands: string[];
 	signal?: AbortSignal;
+	traceCollector?: AITraceCollector;
+	traceLabel?: string;
 }
 
 export async function inferRetitledBasename(
@@ -20,7 +26,7 @@ export async function inferRetitledBasename(
 ): Promise<string> {
 	const completion = await client.create(
 		buildTitleMessages(params.noteContent, params.agentBody, params.defaultSystemPrompt, params.systemCommands),
-		{ signal: params.signal },
+		{ signal: params.signal, traceCollector: params.traceCollector, traceLabel: params.traceLabel },
 	);
 	return buildRetitledBasename(params.currentBasename, completion.text);
 }

@@ -1,6 +1,7 @@
 import { Notice, TFile, type App, type Editor, type MarkdownView } from "obsidian";
 import { isConvoAbortError, PluginActiveRequestManager, type ActiveRequestManager } from "./active-request-manager";
 import { resolveAgent } from "./agent-resolver";
+import { AITraceCollector, appendAITraceLog } from "./ai-trace";
 import { resolveChatConfig } from "./chat-config";
 import { injectReferencedNoteContext } from "./context-resolver";
 import { parseNoteDocument } from "./frontmatter";
@@ -107,6 +108,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	let agentFileForTitle: TFile | null = null;
 	let shouldAutoRetitle = false;
 	let activeRequest: ReturnType<ActiveRequestManager["beginActiveRequest"]> | null = null;
+	let aiTrace: AITraceCollector | null = null;
 
 	try {
 		const editorText = editor.getValue();
@@ -142,6 +144,18 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		const agent = await resolveAgent(app, settings, document.overrides.agent);
 		agentFileForTitle = agent?.file ?? null;
 		config = resolveChatConfig(settings, agent?.frontmatter, document.overrides);
+		if (config.ai_log) {
+			aiTrace = new AITraceCollector({
+				aiLogPath: config.ai_log,
+				maxTokens: config.max_tokens,
+				model: config.model,
+				notePath: file.path,
+				operation: "chat",
+				reasoningEffort: config.reasoning_effort,
+				stream: config.stream,
+				temperature: config.temperature,
+			});
+		}
 		if (!config.apiKey) {
 			new Notice("Convo GPT is missing an OpenAI API key.");
 			return;
@@ -246,6 +260,13 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 		shouldUseMarkdownFileTool,
 		shouldUseReferencedFileTool,
 	});
+	aiTrace?.recordEvent("Chat run flags", {
+		linkedDocumentAutoWrite: linkedDocument?.shouldAutoWrite ?? false,
+		linkedDocumentPath: linkedDocument?.path ?? null,
+		shouldUseFetchTool,
+		shouldUseMarkdownFileTool,
+		shouldUseReferencedFileTool,
+	});
 
 	try {
 		const client = new OpenAIClient(config);
@@ -276,6 +297,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 					requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
 					signal: activeRequestSignal,
 					stopBeforePlainAssistantTurn: config.stream,
+					traceCollector: aiTrace ?? undefined,
 				},
 			);
 			if (toolResult.kind === "completion") {
@@ -323,7 +345,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 									streamedText += delta;
 								},
 							},
-							{ signal: activeRequestSignal },
+							{ signal: activeRequestSignal, traceCollector: aiTrace ?? undefined, traceLabel: "OpenAI chat streamed continuation" },
 						);
 					} finally {
 						writer.stop();
@@ -370,6 +392,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 							requireLinkedDocumentSave: linkedDocument?.shouldAutoWrite === true,
 							signal: activeRequestSignal,
 							stopBeforePlainAssistantTurn: true,
+							traceCollector: aiTrace ?? undefined,
 						},
 						continuation.state,
 						continuation.roundsCompleted,
@@ -410,7 +433,7 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 						writer.append(delta);
 						completionText += delta;
 					},
-				}, { signal: activeRequestSignal });
+				}, { signal: activeRequestSignal, traceCollector: aiTrace ?? undefined, traceLabel: "OpenAI chat stream" });
 			} finally {
 				writer.stop();
 				writeOffset = editor.posToOffset(writer.getCursor());
@@ -429,7 +452,11 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 
 			sourcesAppendix = completion.sourcesAppendix;
 		} else {
-			const completion = await client.create(messages, { signal: activeRequestSignal });
+			const completion = await client.create(messages, {
+				signal: activeRequestSignal,
+				traceCollector: aiTrace ?? undefined,
+				traceLabel: "OpenAI chat create",
+			});
 			for (const notice of completion.mcpNotices ?? []) {
 				recordMcpNotice(notice);
 			}
@@ -458,12 +485,14 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 	} catch (error) {
 		if (isConvoAbortError(error)) {
 			wasCanceled = true;
+			aiTrace?.setOutcome("canceled", error instanceof Error ? error.message : String(error));
 			if (writeOffset === completionStartOffset) {
 				editor.replaceRange("", editor.offsetToPos(assistantBlockStartOffset), editor.offsetToPos(writeOffset));
 				writeOffset = assistantBlockStartOffset;
 			}
 		} else {
 		const message = error instanceof Error ? error.message : String(error);
+		aiTrace?.setOutcome("failed", message);
 		editor.replaceRange(`\n\n_Error: ${message}_`, editor.offsetToPos(writeOffset));
 		writeOffset += `\n\n_Error: ${message}_`.length;
 		new Notice(`Convo GPT request failed: ${message}`);
@@ -487,12 +516,30 @@ export async function runChatCommand(context: ChatCommandContext): Promise<void>
 				agentBody: agentBodyForTitle,
 				agentFile: agentFileForTitle,
 				defaultSystemPrompt: config.defaultSystemPrompt,
+				traceCollector: aiTrace ?? undefined,
 				systemCommands: config.system_commands,
 				signal: activeRequestSignal,
 			});
 		}
 	} finally {
 		activeRequest?.finish();
+	}
+
+	if (aiTrace) {
+		if (!wasCanceled && aiTrace.currentOutcome === null) {
+			aiTrace.setOutcome("success");
+		}
+
+		try {
+			await appendAITraceLog(app, file.path, aiTrace, file.path);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logConvoDebug("chat.aiTrace.flushFailed", {
+				notePath: file.path,
+				error: message,
+			});
+			new Notice(`Convo GPT ai_log failed: ${message}`);
+		}
 	}
 }
 
@@ -630,6 +677,7 @@ interface ToolConversationOptions {
 	requireLinkedDocumentSave?: boolean;
 	signal?: AbortSignal;
 	stopBeforePlainAssistantTurn?: boolean;
+	traceCollector?: AITraceCollector;
 }
 
 interface ToolConversationState {
@@ -681,7 +729,7 @@ async function runToolConversation(
 		includeMarkdownFileTool: options.includeMarkdownFileTool,
 		includeReferencedFileTool: options.includeReferencedFileTool,
 		toolChoice: options.requireLinkedDocumentSave ? "required" : undefined,
-	}, { signal: options.signal });
+	}, { signal: options.signal, traceCollector: options.traceCollector, traceLabel: "OpenAI initial tool turn" });
 	return resumeToolConversation(
 		app,
 		client,
@@ -746,9 +794,15 @@ async function resumeToolConversation(
 
 		const toolOutputs: NonNullable<CreateTurnParams["inputItems"]> = [];
 		for (const toolCall of response.toolCalls) {
+			options.traceCollector?.recordToolCall(toolCall.name, {
+				arguments: tryParseJson(toolCall.arguments),
+				callId: toolCall.call_id,
+				name: toolCall.name,
+			});
 			if (toolCall.name === FETCH_TOOL_NAME && options.includeFetchTool) {
 				requestStatus.notifyToolUse(describeFetchToolCall(toolCall.arguments));
 				const result = await executeFetchToolCall(toolCall.arguments, undefined, options.signal);
+				options.traceCollector?.recordToolResult(toolCall.name, result);
 				logConvoDebug("chat.toolConversation.fetchResult", {
 					status: result.status,
 					url: "url" in result ? result.url ?? null : null,
@@ -784,6 +838,7 @@ async function resumeToolConversation(
 							? new Set([options.linkedDocument.path])
 							: undefined,
 				});
+				options.traceCollector?.recordToolResult(toolCall.name, result);
 				logConvoDebug("chat.toolConversation.markdownWriteResult", {
 					status: result.status,
 					path: "path" in result ? result.path ?? null : null,
@@ -813,6 +868,7 @@ async function resumeToolConversation(
 						},
 					},
 				});
+				options.traceCollector?.recordToolResult(toolCall.name, result);
 				logConvoDebug("chat.toolConversation.referencedFileResult", {
 					status: result.status,
 					path: "path" in result ? result.path ?? null : null,
@@ -834,6 +890,7 @@ async function resumeToolConversation(
 				const result = await executeReferencedFileSearchToolCall(app, toolCall.arguments, options.referencedFileReadState, {
 					signal: options.signal,
 				});
+				options.traceCollector?.recordToolResult(toolCall.name, result);
 				logConvoDebug("chat.toolConversation.referencedFileSearchResult", {
 					status: result.status,
 					path: "path" in result ? result.path ?? null : null,
@@ -856,6 +913,7 @@ async function resumeToolConversation(
 				const result = await executeReferencedFileSectionToolCall(app, toolCall.arguments, options.referencedFileReadState, {
 					signal: options.signal,
 				});
+				options.traceCollector?.recordToolResult(toolCall.name, result);
 				logConvoDebug("chat.toolConversation.referencedFileSectionResult", {
 					status: result.status,
 					path: "path" in result ? result.path ?? null : null,
@@ -888,6 +946,10 @@ async function resumeToolConversation(
 					message: `Unsupported tool call: ${toolCall.name}`,
 				}),
 			);
+			options.traceCollector?.recordToolResult(toolCall.name, {
+				status: "validation_error",
+				message: `Unsupported tool call: ${toolCall.name}`,
+			});
 		}
 
 		requestStatus.setCalling(model);
@@ -919,7 +981,7 @@ async function resumeToolConversation(
 			inputItems: toolOutputs,
 			previousResponseId: response.responseId,
 			toolChoice: nextToolChoice,
-		}, { signal: options.signal });
+		}, { signal: options.signal, traceCollector: options.traceCollector, traceLabel: "OpenAI tool continuation turn" });
 	}
 
 	logConvoDebug("chat.toolConversation.roundLimitExceeded", {
@@ -1160,6 +1222,7 @@ async function autoRetitleChatNote(
 		agentFile: TFile | null;
 		defaultSystemPrompt: string;
 		signal?: AbortSignal;
+		traceCollector?: AITraceCollector;
 		systemCommands: string[];
 	},
 ): Promise<void> {
@@ -1189,6 +1252,8 @@ async function autoRetitleChatNote(
 			agentBody,
 			defaultSystemPrompt: context.defaultSystemPrompt,
 			signal: context.signal,
+			traceCollector: context.traceCollector,
+			traceLabel: "OpenAI auto-retitle create",
 			systemCommands: context.systemCommands,
 		});
 		const nextPath = buildSiblingMarkdownPath(file.path, nextBasename);
@@ -1219,4 +1284,12 @@ function buildSiblingMarkdownPath(currentPath: string, nextBasename: string): st
 	const slashIndex = currentPath.lastIndexOf("/");
 	const folder = slashIndex >= 0 ? currentPath.slice(0, slashIndex + 1) : "";
 	return `${folder}${nextBasename}.md`;
+}
+
+function tryParseJson(value: string): unknown {
+	try {
+		return JSON.parse(value) as unknown;
+	} catch {
+		return value;
+	}
 }

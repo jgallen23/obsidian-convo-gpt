@@ -16,6 +16,7 @@ describe("frontmatter helpers", () => {
 model: openai@gpt-5.4
 reasoning_effort: medium
 temperature: 0.4
+ai_log: Logs/ai-log.md
 document: "[[Drafts/Proposal]]"
 system_commands:
   - Be concise
@@ -28,6 +29,7 @@ Hello`;
 		expect(parsed.overrides.model).toBe("openai@gpt-5.4");
 		expect(parsed.overrides.reasoning_effort).toBe("medium");
 		expect(parsed.overrides.temperature).toBe(0.4);
+		expect(parsed.overrides.ai_log).toBe("Logs/ai-log.md");
 		expect(parsed.overrides.document).toBe("[[Drafts/Proposal]]");
 		expect(parsed.overrides.system_commands).toEqual(["Be concise"]);
 		expect(parsed.body.trim()).toContain("# role::user");
@@ -66,6 +68,11 @@ Hello`;
 		expect(parseNoteOverrides({ mcp_servers: " weather " }).mcp_servers).toEqual(["weather"]);
 		expect(parseNoteOverrides({ mcp_servers: [" weather ", "", "docs", "weather"] }).mcp_servers).toEqual(["weather", "docs"]);
 		expect(parseNoteOverrides({}).mcp_servers).toBeUndefined();
+	});
+
+	it("parses ai_log as an optional trimmed string", () => {
+		expect(parseNoteOverrides({ ai_log: " Logs/ai-log.md " }).ai_log).toBe("Logs/ai-log.md");
+		expect(parseNoteOverrides({ ai_log: "   " }).ai_log).toBeUndefined();
 	});
 
 	it("preserves document when sibling frontmatter fields are blank", () => {

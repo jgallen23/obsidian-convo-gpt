@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AITraceCollector } from "../core/ai-trace";
 import { setConvoDebugLoggingEnabled } from "../core/debug-log";
 import { getOpenAIRequestMetadata, OpenAIClient } from "../core/openai-client";
 import type { ResolvedChatConfig } from "../core/types";
+
+vi.mock("obsidian", async () => {
+	return await import("../test/obsidian-stub");
+});
 
 describe("OpenAI client request metadata", () => {
 	afterEach(() => {
@@ -115,6 +120,36 @@ describe("OpenAI client request metadata", () => {
 		await client.create([{ role: "user", content: "Hello" }], { signal });
 
 		expect(create).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({ signal }));
+	});
+
+	it("records raw request and response payloads in the trace collector", async () => {
+		const client = new OpenAIClient(buildConfig());
+		const trace = new AITraceCollector({
+			aiLogPath: "Logs/ai-log.md",
+			maxTokens: 4096,
+			model: "openai@gpt-5.4",
+			notePath: "Notes/Chat.md",
+			operation: "chat",
+			reasoningEffort: "none",
+			stream: true,
+			temperature: 0.2,
+		});
+		(client as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }).client.responses.create = vi.fn(async () => ({
+			id: "resp_1",
+			output_text: "Hello",
+			output: [],
+		}));
+
+		await client.create([{ role: "user", content: "Hello" }], {
+			traceCollector: trace,
+			traceLabel: "OpenAI test create",
+		});
+		trace.setOutcome("success");
+
+		const markdown = trace.renderMarkdown();
+		expect(markdown).toContain("OpenAI test create");
+		expect(markdown).toContain("\"model\": \"gpt-5.4\"");
+		expect(markdown).toContain("\"output_text\": \"Hello\"");
 	});
 
 	it("logs request debug details for non-streaming requests", async () => {
@@ -447,6 +482,49 @@ describe("OpenAI client request metadata", () => {
 		);
 
 		expect(stream).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({ signal }));
+	});
+
+	it("records streamed MCP activities in the trace collector", async () => {
+		const client = new OpenAIClient(buildConfig());
+		const trace = new AITraceCollector({
+			aiLogPath: "Logs/ai-log.md",
+			maxTokens: 4096,
+			model: "openai@gpt-5.4",
+			notePath: "Notes/Chat.md",
+			operation: "chat",
+			reasoningEffort: "none",
+			stream: true,
+			temperature: 0.2,
+		});
+		const fakeStream = {
+			async *[Symbol.asyncIterator]() {
+				yield {
+					type: "response.output_item.added",
+					item: {
+						type: "mcp_list_tools",
+						id: "list_1",
+						server_label: "weather",
+					},
+				};
+			},
+			finalResponse: async () => ({
+				id: "resp_1",
+				output: [],
+			}),
+		};
+		(client as unknown as { client: { responses: { stream: ReturnType<typeof vi.fn> } } }).client.responses.stream = vi.fn(() => fakeStream);
+
+		await client.stream([{ role: "user", content: "Weather?" }], {
+			onText: vi.fn(),
+		}, {
+			traceCollector: trace,
+			traceLabel: "OpenAI traced stream",
+		});
+		trace.setOutcome("success");
+
+		const markdown = trace.renderMarkdown();
+		expect(markdown).toContain("Using MCP server: weather");
+		expect(markdown).toContain("\"serverLabel\": \"weather\"");
 	});
 
 	it("captures MCP tool usage from output_item.done stream events", async () => {
