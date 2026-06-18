@@ -20,13 +20,13 @@ describe("response anchors", () => {
 		);
 		expect(buildAssistantSuffix("1", true)).toContain("[[#_AI (1)_|Top of answer]]");
 		expect(buildAssistantSuffix("1", true)).toContain("# _You (2)_");
-		expect(buildAssistantSuffix("1", true)).toContain("\n\n<hr class=\"__convo_gpt__\">\n# _You (2)_");
+		expect(buildAssistantSuffix("1", true)).toContain("\n\n<hr class=\"__convo_gpt__\">\n\n# _You (2)_");
 		expect(buildAssistantSuffix("1", true)).not.toContain("\n\n\n<hr class=\"__convo_gpt__\">");
 		expect(buildAssistantSuffix("1", true)).not.toContain("Jump to prompt");
 	});
 
 	it("omits the footer link while preserving spacing when disabled", () => {
 		expect(buildAssistantSuffix("1", false)).not.toContain("Top of answer");
-		expect(buildAssistantSuffix("1", false)).toContain("\n<hr class=\"__convo_gpt__\">\n# _You (2)_");
+		expect(buildAssistantSuffix("1", false)).toContain("\n<hr class=\"__convo_gpt__\">\n\n# _You (2)_");
 	});
 });
