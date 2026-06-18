@@ -26,7 +26,7 @@ export function buildAssistantSuffix(exchangeId: string, includeTopLink: boolean
 		lines.push(`[[#_AI (${exchangeId})_|Top of answer]]`, "");
 	}
 
-	lines.push(CHAT_SEPARATOR, buildUserHeading(nextUserId), "", "");
+	lines.push(CHAT_SEPARATOR, "", buildUserHeading(nextUserId), "", "");
 	return lines.join("\n");
 }
 
